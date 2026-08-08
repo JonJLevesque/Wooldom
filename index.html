@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wooldom</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="stage">
+  <div id="topbar">
+    <span class="gname">WOOLDOM</span>
+    <span id="seatChips"></span>
+    <span class="stat">SATCHEL <b id="hSatchel">—</b></span>
+    <span id="hModules"></span>
+    <span id="hoverinfo"></span>
+  </div>
+  <div id="wrap">
+    <canvas id="cv" width="960" height="540" role="img"
+            aria-label="The pasture board. Scores and the tile in hand are reported around it."></canvas>
+  </div>
+  <div id="tray">
+    <canvas id="trayCv" width="96" height="96" aria-hidden="true"></canvas>
+    <div id="trayInfo"></div>
+    <div id="trayBtns"></div>
+  </div>
+  <div id="hintbar" class="off">
+    <span class="ht" id="hintText"></span>
+    <button id="hintClose" class="hx" type="button" title="Got it">&#10005;</button>
+  </div>
+  <div id="panel"></div>
+
+  <!-- spoken, not seen -->
+  <div id="sr" class="vh" role="status" aria-live="polite"></div>
+
+  <!-- settings popover -->
+  <div id="settings"></div>
+
+  <!-- title / new game setup -->
+  <div class="overlay" id="menu">
+    <canvas id="logoCv" width="128" height="48"
+            style="width:256px;height:96px;image-rendering:pixelated" aria-hidden="true"></canvas>
+    <h1 class="logo">WOOLDOM</h1>
+    <div class="tagline">lay the land. post the shepherds. count the meadows.</div>
+    <div id="menuRoot"></div>
+  </div>
+
+  <!-- end-of-game reveal + summary -->
+  <div class="overlay hidden" id="end">
+    <h2 class="ovtitle" id="eTitle"></h2>
+    <div class="ovsub" id="eStats"></div>
+    <div id="eTable"></div>
+    <div class="hint" id="eHint"></div>
+    <div class="btnrow">
+      <button class="bigbtn" id="eAgain" type="button">PLAY AGAIN</button>
+      <button class="bigbtn ghost" id="eMenu" type="button">MENU</button>
+    </div>
+  </div>
+</div>
+<footer>a tile-laying pastoral &middot; html5 canvas &middot; no dependencies</footer>
+
+<script src="js/core.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/tiles.js"></script>
+<script src="js/board.js"></script>
+<script src="js/art.js"></script>
+<script src="js/game.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/render.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>

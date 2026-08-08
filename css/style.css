@@ -1,0 +1,346 @@
+/* ============================================================
+   WOOLDOM — chrome styling
+   A gun-camera housing: scorched iron frame, ash-cream readouts.
+   ============================================================ */
+:root{
+  --night:#16120f;      /* page background            */
+  --night2:#211b17;     /* panel background           */
+  --slate:#46392f;      /* borders / muted lines      */
+  --wool:#f2ead9;       /* ash cream (primary text)   */
+  --lanolin:#c9bfa8;    /* dim cream                  */
+  --meadow:#8cc45c;     /* success / go               */
+  --barn:#c0503a;       /* danger / accent            */
+  --barn-t:#e07a5f;     /* danger as TEXT — #c0503a only reaches 3.2:1 on the panel */
+  --barn-hi:#ef9878;    /* danger text ON a danger-tinted ground */
+  --sky:#8fc7e8;        /* info accent                */
+  --gold:#ffd86b;       /* cash / highlight           */
+  --dim:#8a7c6c;        /* the quietest legible grey (4.7:1 on --night)  */
+  --focus:#ffd86b;      /* keyboard focus ring        */
+  font-size:16px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  background:var(--night);
+  background-image:radial-gradient(ellipse 90% 60% at 50% -10%, #3a2418 0%, var(--night) 62%);
+  color:var(--wool);
+  font-family:ui-monospace,'Menlo','Consolas',monospace;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:100vh;padding:12px;
+  user-select:none;-webkit-user-select:none;
+}
+#stage{position:relative;width:1284px;max-width:100%}
+/* ---- top HUD bar ---- */
+#topbar{
+  display:flex;align-items:center;gap:14px;
+  background:var(--night2);border:2px solid var(--slate);border-bottom:none;
+  padding:6px 12px;font-size:12px;letter-spacing:1px;
+  border-radius:6px 6px 0 0;
+}
+#topbar .pname{font-weight:bold;letter-spacing:2px;text-transform:uppercase;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;min-width:110px;max-width:260px;color:var(--wool)}
+#topbar .stat.gold b{color:var(--gold)}
+#topbar #hWind b{color:var(--wool);letter-spacing:0}
+#topbar .lvname{color:var(--lanolin);text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#topbar .stat b{color:var(--wool)}
+#topbar .stat{color:var(--lanolin);white-space:nowrap}
+#topbar .stat.good b{color:var(--meadow)}
+#topbar .stat.bad b{color:var(--barn-t)}
+#topbar #time.low{color:var(--barn-t);animation:blink 1s steps(2) infinite}
+#topbar #hoverinfo{margin-left:auto;color:var(--sky);text-transform:uppercase;font-size:11px;min-width:150px;text-align:right}
+@keyframes blink{50%{opacity:.35}}
+/* off-screen but spoken — the canvas toast has no text for a screen reader */
+.vh{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;
+  overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+/* ---- keyboard focus: one unmistakable gold ring, never on mouse clicks ---- */
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.abtn:focus-visible,.sbtn:focus-visible,.dbtn:focus-visible,
+.card:focus-visible,.bigbtn:focus-visible,.hx:focus-visible,input.vol:focus-visible{
+  outline:2px solid var(--focus);outline-offset:2px;
+}
+.dbtn:focus-visible{outline-offset:-2px}          /* segments touch: keep the ring inside */
+/* ---- canvas ---- */
+#wrap{position:relative;line-height:0;border:2px solid var(--slate);background:#000}
+canvas#cv{
+  width:1280px;max-width:100%;
+  image-rendering:pixelated;image-rendering:crisp-edges;
+  cursor:crosshair;display:block;touch-action:none;
+}
+/* ---- action panel ---- */
+#panel{
+  display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;
+  background:var(--night2);border:2px solid var(--slate);border-top:none;
+  padding:8px;border-radius:0 0 6px 6px;
+}
+/* the two panel rows are inert on desktop — the panel stays one flat flex line,
+   exactly as before — and become real stacked rows under 720px */
+.prow{display:contents}
+.abtn{
+  position:relative;width:58px;
+  background:#2a221c;border:2px solid var(--slate);border-radius:4px;
+  display:flex;flex-direction:column;align-items:center;padding:3px 0 2px;
+  cursor:pointer;color:var(--lanolin);font:inherit;
+}
+.abtn:hover{border-color:var(--lanolin)}
+.abtn.sel{border-color:var(--wool);background:#3d3128;color:var(--wool);
+  box-shadow:0 0 0 1px var(--wool) inset}
+/* spent: dimmed by palette rather than opacity, so "0 left" stays readable (4.5:1)
+   while the icon fades — the button still answers a click with OUT OF … */
+.abtn.none{cursor:default;background:#1b1613;border-color:#3a3129;color:#8a7c6c;box-shadow:none}
+.abtn.none canvas{opacity:.4}
+.abtn.none .k{color:#8a7c6c}
+.abtn.none:hover{border-color:#3a3129}
+.abtn canvas{width:32px;height:32px;image-rendering:pixelated}
+.abtn .cnt{font-size:12px;font-weight:bold;line-height:1}
+.abtn .k{position:absolute;top:1px;left:3px;font-size:11px;line-height:1;color:#a3937c}
+.abtn.sel .k{color:var(--sky)}
+.sep{width:2px;background:var(--slate);margin:2px 2px;border-radius:2px}
+.sbtn{
+  background:#2a221c;border:2px solid var(--slate);border-radius:4px;color:var(--lanolin);
+  font-family:inherit;font-size:11px;letter-spacing:1px;padding:0 10px;cursor:pointer;min-height:44px;
+}
+.sbtn:hover{border-color:var(--lanolin);color:var(--wool)}
+.sbtn.on{border-color:var(--sky);color:var(--sky)}
+.sbtn.warn{border-color:var(--barn);color:var(--barn-t)}
+/* FINISH: three unmistakable states — dead, live, and asking to confirm */
+.sbtn.finish[disabled]{cursor:default;border-color:#3a3129;color:#8a7c6c;background:#1b1613}
+.sbtn.finish.ready{opacity:1;border-color:var(--meadow);color:var(--meadow);
+  background:rgba(140,196,92,.10);box-shadow:0 0 0 1px rgba(140,196,92,.35) inset}
+.sbtn.finish.ready:hover{background:rgba(140,196,92,.22);color:var(--wool)}
+.sbtn.finish.armed{border-color:var(--barn);color:var(--barn-hi);background:rgba(192,80,58,.18);
+  box-shadow:0 0 0 1px rgba(192,80,58,.5) inset;font-weight:bold;animation:blink 1s steps(2) infinite}
+/* NUKE alone at the far end, unmistakably dangerous */
+.sbtn.nuke{margin-left:auto;font-weight:bold}
+.sbtn.nuke:hover{background:rgba(192,80,58,.16);color:var(--barn-t)}
+/* the icon-only controls stay square so they read as a set */
+.sbtn.ico{padding:0 10px;font-size:14px;line-height:1}
+#ratebox{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2px;
+  color:var(--lanolin);font-size:11px;letter-spacing:1px}
+#ratebox div{display:flex;gap:4px;align-items:center}
+#ratebox #rVal{min-width:74px;text-align:center;color:var(--wool)}
+#ratebox button{width:24px;min-height:24px;padding:0;font-size:12px}
+/* direction filter — three-segment PICK control */
+#dirbox{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2px;
+  color:var(--lanolin);font-size:11px;letter-spacing:1px}
+.dirseg{display:flex;gap:0;border:2px solid var(--slate);border-radius:4px;overflow:hidden}
+.dbtn{background:#2a221c;border:none;border-right:2px solid var(--slate);color:var(--lanolin);
+  font-family:inherit;font-size:11px;letter-spacing:1px;padding:0 8px;min-height:40px;cursor:pointer}
+.dbtn:last-child{border-right:none}
+.dbtn:hover{color:var(--wool)}
+.dbtn.on{background:#3d3128;color:var(--wool);box-shadow:0 0 0 1px var(--wool) inset}
+/* a filter is on: the whole control lights amber so it can't be forgotten */
+#dirbox.active>span{color:#ffd86b}
+#dirbox.active .dirseg{border-color:#ffd86b;box-shadow:0 0 0 2px rgba(255,216,107,.18)}
+#dirbox.active .dbtn.on{background:#4a3d1e;color:#ffd86b;box-shadow:0 0 0 1px #ffd86b inset}
+/* volume slider */
+input.vol{width:88px;accent-color:var(--wool);cursor:pointer;align-self:center;background:transparent}
+/* ---- settings popover: anchored to the panel's right end, over the field's corner ---- */
+#settings{position:absolute;right:8px;bottom:8px;z-index:12;width:250px;max-width:calc(100% - 16px)}
+.setcard{
+  display:flex;flex-direction:column;gap:8px;
+  background:var(--night2);border:2px solid var(--slate);border-radius:6px;
+  padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.55);
+}
+.setcard.hidden{display:none}
+.settitle{font-size:11px;letter-spacing:3px;color:var(--lanolin);font-weight:bold}
+.setrow{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:1px;color:var(--lanolin)}
+.setrow label,.setrow .setlbl{min-width:52px}
+.setrow input.vol{flex:1;width:auto;min-height:28px}
+.setrow .setval{min-width:30px;text-align:right;color:var(--wool)}
+.setcard .sbtn.wide{flex:1;padding:0 8px}
+.setcard>.sbtn{align-self:stretch}
+/* onboarding hint bar (between field and panel) */
+#hintbar{
+  display:flex;align-items:center;gap:10px;overflow:hidden;
+  background:var(--night2);border:2px solid var(--slate);border-top:none;border-bottom:none;
+  color:var(--sky);font-size:11px;letter-spacing:.5px;line-height:1.4;
+  padding:7px 12px;min-height:34px;
+  transition:opacity .3s ease;
+}
+#hintbar .ht{flex:1}
+#hintbar .hx{background:transparent;border:none;color:var(--lanolin);font-family:inherit;
+  font-size:13px;cursor:pointer;padding:2px 6px;min-height:32px}
+#hintbar .hx:hover{color:var(--wool)}
+/* dismissed: fade the contents but keep the strip, so the panel never jumps */
+#hintbar.off{opacity:0;pointer-events:none}
+/* ---- overlays ----
+   The arena keeps burning behind every one of these, so the scrim is radial:
+   opaque under the words, thin at the edges, so you can still see the ground
+   you are about to be dropped onto. */
+.overlay{
+  position:absolute;inset:0;z-index:10;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+  background:radial-gradient(ellipse 64% 76% at 50% 50%,
+    rgba(16,12,9,.95) 0%, rgba(16,12,9,.90) 40%, rgba(16,12,9,.62) 100%);
+  text-align:center;padding:20px;
+}
+.overlay.hidden{display:none}
+/* the end card sits lighter so the smoke keeps drifting behind it */
+#end{background:radial-gradient(ellipse 64% 76% at 50% 50%,
+  rgba(16,12,9,.88) 0%, rgba(16,12,9,.80) 40%, rgba(16,12,9,.52) 100%)}
+h1.logo{
+  font-size:44px;letter-spacing:10px;color:var(--wool);font-weight:900;
+  text-shadow:0 4px 0 #0a0d14, 0 0 24px rgba(242,236,221,.15);
+}
+.tagline{color:var(--lanolin);letter-spacing:3px;font-size:12px;text-transform:uppercase}
+#levelgrid{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;max-width:900px}
+.card{
+  width:158px;background:var(--night2);border:2px solid var(--slate);border-radius:6px;
+  padding:10px 10px 12px;cursor:pointer;text-align:left;color:var(--wool);
+  display:flex;flex-direction:column;gap:6px;font:inherit;
+}
+.card:hover{border-color:var(--wool);transform:translateY(-2px)}
+.card .num{font-size:11px;color:var(--sky);letter-spacing:2px}
+.card .nm{font-size:13px;font-weight:bold;letter-spacing:1px;min-height:32px}
+.card .sw{height:10px;border-radius:2px;border:1px solid #0008}
+.card .meta{font-size:11px;color:var(--lanolin);line-height:1.6}
+.card .done{color:var(--meadow);font-size:11px;letter-spacing:1px;min-height:13px}
+.card .done .star{color:var(--wool);text-shadow:0 0 6px rgba(242,236,221,.55)}
+.help{max-width:760px;font-size:11px;color:var(--lanolin);line-height:1.8;letter-spacing:.5px}
+.help b{color:var(--wool)}
+.bigbtn{
+  background:var(--wool);color:#1a1512;border:none;border-radius:4px;
+  font-family:inherit;font-weight:bold;font-size:14px;letter-spacing:2px;
+  padding:12px 26px;cursor:pointer;box-shadow:0 4px 0 #5c4a3a;
+}
+.bigbtn:hover{transform:translateY(-1px);box-shadow:0 5px 0 #5c4a3a}
+.bigbtn:active{transform:translateY(2px);box-shadow:0 1px 0 #5c4a3a}
+.bigbtn.ghost{background:transparent;color:var(--wool);border:2px solid var(--slate);box-shadow:none}
+.bigbtn.ghost:hover{border-color:var(--wool)}
+.ovtitle{font-size:30px;letter-spacing:6px;font-weight:900}
+.ovtitle.win{color:var(--meadow)}
+.ovtitle.fail{color:var(--barn)}
+.ovsub{color:var(--lanolin);font-size:12px;letter-spacing:2px;line-height:2}
+.ovsub.sub2{font-size:11px;letter-spacing:1.5px;color:#b0a290;line-height:1.6;margin-top:-8px}
+.ovsub.sub2:empty{display:none}
+/* what this pasture hands you, on the briefing screen */
+.loadout{max-width:640px;color:var(--wool);font-size:11px;letter-spacing:1.5px;line-height:1.9;
+  background:#1b1613;border:2px solid var(--slate);border-radius:4px;padding:7px 14px}
+.loadout:empty{display:none}
+.newbest{color:var(--wool);background:rgba(140,196,92,.18);border:1px solid var(--meadow);
+  border-radius:4px;padding:4px 14px;font-size:11px;letter-spacing:4px;font-weight:bold}
+.newbest:empty{display:none}
+.hint{max-width:560px;color:var(--sky);font-size:11px;line-height:1.8;letter-spacing:.5px;font-style:italic}
+/* pre-level warning line (filled by A from a level's warn field) */
+.warnline{color:var(--barn-t);font-size:11px;letter-spacing:3px;text-transform:uppercase;font-weight:bold;
+  min-height:0}
+.warnline:not(:empty){min-height:16px;animation:warnblink 1.4s ease-in-out infinite}
+@keyframes warnblink{50%{opacity:.4}}
+.btnrow{display:flex;gap:12px}
+footer{margin-top:10px;font-size:11px;color:var(--dim);letter-spacing:1px;text-align:center}
+/* ---- mobile: the panel becomes two honest rows and every target clears 44px ---- */
+@media (max-width:720px){
+  body{padding:6px}
+  #topbar{gap:8px;font-size:11px;flex-wrap:wrap}
+  #topbar #hoverinfo{min-width:0;margin-left:0;text-align:left}
+  #hintbar{font-size:11px}
+  #hintbar .hx{min-height:44px;min-width:44px;font-size:16px}
+  /* row 1: the nine roles as a wrapping grid. row 2: everything else */
+  #panel{flex-direction:column;gap:6px;padding:6px}
+  .prow{display:flex;flex-wrap:wrap;align-items:stretch;gap:6px;width:100%}
+  .prow.roles{display:grid;grid-template-columns:repeat(auto-fit,minmax(56px,1fr));gap:6px}
+  .abtn{width:auto;min-height:52px;padding:4px 0 3px}
+  .sep{display:none}                       /* the row break does the dividing now */
+  .sbtn{min-height:44px;min-width:44px;padding:0 12px}
+  .dbtn{min-height:44px;min-width:44px;padding:0 14px;font-size:12px}
+  #ratebox button{width:44px;min-height:44px;font-size:15px}
+  #ratebox #rVal{min-width:84px}
+  #dirbox,#ratebox{flex:0 0 auto}
+  input.vol{width:96px;min-height:44px}
+  /* NUKE is pushed to its own end of the row so no thumb finds it beside the slider */
+  .sbtn.nuke{margin-left:auto}
+  #settings{left:6px;right:6px;bottom:6px;width:auto}
+  .card{width:44%;min-width:132px}
+}
+/* ---- reduced motion: the OS preference, and the in-game CALM MODE toggle ----
+   ui.js mirrors G.fxCalm onto body.calm so the setting works even when the OS
+   preference says otherwise. Canvas-side strobing is handled in render.js. */
+@media (prefers-reduced-motion:reduce){
+  #topbar #time.low,.warnline:not(:empty),.sbtn.finish.armed{animation:none}
+  .card:hover,.bigbtn:hover,.bigbtn:active{transform:none}
+  #hintbar{transition:none}
+}
+body.calm #topbar #time.low,
+body.calm .warnline:not(:empty),
+body.calm .sbtn.finish.armed{animation:none}
+body.calm .card:hover,body.calm .bigbtn:hover,body.calm .bigbtn:active{transform:none}
+body.calm #hintbar{transition:none}
+/* ---- fullscreen: the stage owns the screen, its bars centred at the field's width.
+   ui.js sets --fsw to the snapped canvas width so the chrome tracks the canvas. ---- */
+#stage:fullscreen{max-width:none;background:var(--night);padding:8px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center}
+#stage:fullscreen>#topbar,#stage:fullscreen>#wrap,
+#stage:fullscreen>#hintbar,#stage:fullscreen>#panel{width:var(--fsw,100%)}
+#stage:-webkit-full-screen{max-width:none;background:var(--night);padding:8px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center}
+#stage:-webkit-full-screen>#topbar,#stage:-webkit-full-screen>#wrap,
+#stage:-webkit-full-screen>#hintbar,#stage:-webkit-full-screen>#panel{width:var(--fsw,100%)}
+
+/* ============================================================
+   WOOLDOM — components the pasture never needed
+   ============================================================ */
+/* ---- weapon / item buttons: a name and a count, not an icon ---- */
+.abtn{width:66px;justify-content:center;gap:1px;padding:5px 2px 3px}
+.abtn .wn{font-size:11px;letter-spacing:1px;line-height:1.1;text-align:center;
+  white-space:nowrap;overflow:hidden;max-width:60px}
+.abtn .cnt{font-size:11px;color:var(--lanolin)}
+.abtn.sel .cnt{color:var(--gold)}
+.abtn.item{border-style:dashed}
+.abtn.item .wn{color:var(--sky)}
+/* ---- the aim nudges, grouped so they read as one control ---- */
+#aimbox{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2px;
+  color:var(--lanolin);font-size:11px;letter-spacing:1px}
+#aimrow{display:flex;gap:4px}
+#aimrow .sbtn{min-width:30px;padding:0 6px}
+.sbtn.fire{font-weight:bold;letter-spacing:2px}
+.sbtn.fire[disabled]{cursor:default;border-color:#3a3129;color:#7d7267;background:#1b1613}
+.sbtn.fire.ready{border-color:var(--barn);color:var(--barn-hi);background:rgba(192,80,58,.16);
+  box-shadow:0 0 0 1px rgba(192,80,58,.4) inset}
+.sbtn.fire.ready:hover{background:rgba(192,80,58,.3);color:var(--wool)}
+/* ---- menu: the three ways in ---- */
+.btnrow.col{flex-direction:column;gap:10px;align-items:stretch;min-width:260px}
+.card.locked{cursor:default;opacity:.55;border-color:#332b24}
+.card.locked:hover{border-color:#332b24;transform:none}
+.card.ghostcard{opacity:.28}
+/* ---- skirmish setup ---- */
+#setupbox{display:flex;flex-direction:column;gap:8px;background:var(--night2);
+  border:2px solid var(--slate);border-radius:6px;padding:12px 14px;min-width:520px;max-width:96vw}
+.setuprow{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:1px;color:var(--lanolin)}
+.setuprow .slbl{min-width:56px;text-align:left}
+.setuprow .pdot{width:12px;height:12px;border-radius:2px;border:1px solid #0008;flex:0 0 auto}
+.setuprow .dirseg{flex:1}
+.setuprow .dbtn{flex:1;min-height:32px;font-size:10px;padding:0 4px}
+.nameinput{width:104px;background:#191411;border:2px solid var(--slate);border-radius:4px;
+  color:var(--wool);font:inherit;font-size:11px;letter-spacing:1px;padding:5px 6px;text-transform:uppercase}
+.nameinput:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+/* ---- the armory ---- */
+#shoplist{display:flex;flex-direction:column;gap:4px;max-height:44vh;overflow-y:auto;
+  min-width:600px;max-width:96vw;padding-right:4px}
+.shoprow{display:grid;grid-template-columns:110px 1fr 44px 78px 62px;gap:8px;align-items:center;
+  background:var(--night2);border:2px solid var(--slate);border-radius:4px;padding:5px 8px;
+  font-size:11px;letter-spacing:1px;text-align:left}
+.shoprow .sname{color:var(--wool);font-weight:bold}
+.shoprow .sdesc{color:var(--lanolin);font-size:10px;letter-spacing:.5px}
+.shoprow .sown{color:var(--sky);text-align:center}
+.shoprow .scost{color:var(--gold);text-align:right}
+.shoprow .scost.poor{color:var(--dim)}
+.sbtn.buy{min-height:30px;padding:0 8px;font-size:10px}
+.sbtn.buy[disabled]{cursor:default;border-color:#332b24;color:#7d7267;background:#1b1613}
+/* ---- the end card's table ---- */
+#eTable{display:flex;flex-direction:column;gap:2px;min-width:520px;max-width:96vw}
+.erow{display:grid;grid-template-columns:1fr 70px 60px 78px 90px;gap:6px;
+  padding:4px 10px;font-size:11px;letter-spacing:1px;text-align:right;
+  background:var(--night2);border:1px solid var(--slate);border-radius:3px}
+.erow span:first-child{text-align:left;font-weight:bold}
+.erow.ehead{background:transparent;border-color:transparent;color:var(--dim);font-size:10px}
+.erow.ehead span:first-child{font-weight:normal}
+/* ---- narrow screens ---- */
+@media (max-width:720px){
+  .abtn{width:auto;min-width:58px}
+  #setupbox,#shoplist,#eTable{min-width:0;width:100%}
+  .shoprow{grid-template-columns:1fr 52px 62px;row-gap:2px}
+  .shoprow .sdesc{display:none}
+  .erow{grid-template-columns:1fr 46px 42px 56px 70px;font-size:10px;letter-spacing:0}
+  .setuprow{flex-wrap:wrap}
+  .nameinput{width:100%}
+}
