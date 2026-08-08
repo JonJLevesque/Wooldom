@@ -419,6 +419,33 @@ for(const f of FIXTURES){
     'opening=' + JSON.stringify(opening) + '  next=' + cells);
 })();
 
+(function legalCellsNeverOffersWhatPlacementRefuses(){
+  /* The empty-board fast path used to hand back the origin without asking
+     canPlace, so a tile the lookups cannot resolve — an unregistered pack
+     row — was offered with four rotations and then refused by placeTile.
+     That reads as "the tile is fine, the placement failed" and sends you
+     hunting in the wrong file, so it is asserted on BOTH boards now. */
+  const bad = [];
+  const unknown = 'NO_SUCH_TILE';
+  B.resetBoard(2);
+  for(const c of B.legalCells(unknown)) for(const r of c.rots)
+    bad.push('empty board offers an unknown tile at ' + c.x + ',' + c.y + ' r' + r);
+  for(let r = 0; r < 4; r++) if(B.canPlace(unknown, r, 0, 0))
+    bad.push('canPlace allows an unknown tile at the origin r' + r);
+  if(B.placeTile(0, 0, unknown, 0)) bad.push('placeTile accepted an unknown tile');
+
+  for(const t of B.TILES.concat(B.BROOK_TILES)){   // the real tiles, empty board
+    B.resetBoard(2);
+    const offered = new Set();
+    for(const c of B.legalCells(t.id)) for(const r of c.rots) offered.add(c.x + ',' + c.y + ':' + r);
+    for(let r = 0; r < 4; r++){
+      const can = B.canPlace(t.id, r, 0, 0), has = offered.has('0,0:' + r);
+      if(can !== has) bad.push(t.id + ' r' + r + ' on an empty board: canPlace=' + can + ' legalCells=' + has);
+    }
+  }
+  check('on an empty board legalCells still defers to canPlace', bad.length === 0, bad);
+})();
+
 (function legalCellsAgreesWithCanPlace(){
   B.resetBoard(2);
   B.placeTile(0, 0, 'FOLD1_LS', 0);

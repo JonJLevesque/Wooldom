@@ -216,10 +216,13 @@ Wave-3 brief notes: (0) BLOCKER — tiles.js needs registerTiles(rows)
 base-versus-registered split in tiledata's roster/count assertions — landing
 one without the other either breaks packs silently or forces the roster guard
 (the one we least want weakened) to be loosened. Design both together, BEFORE
-the first pack agent starts. Today a pack's TILES.push() yields tileById→null
-while legalCells shows ONE phantom cell on an empty board (looks placeable,
-never places, dead-tile rule discards) — tiledata's slotOwner cross-check DOES
-catch it and now names registerTiles as the fix in its failure message.
+the first pack agent starts. Today a pack's TILES.push() yields tileById→null and
+the tile is simply never offered (the empty-board legalCells fast path that
+once offered ANY tile at the origin without consulting canPlace was a real
+board.js bug, found via this trail and fixed — the branch now defers to
+canPlace per rotation, so the two cannot disagree by construction). tiledata's
+slotOwner cross-check catches unregistered rows and names registerTiles as
+the fix in its failure message.
 board.js needs nothing (it reads through the lookups). (1) the brook module now exercises NO brook↔fold or
 brook↔lane adjacency — a pack reintroducing either walks fresh ground; test it
 directly. (2) A lane-over-water tile is forced into rim order B,L,B,L — two

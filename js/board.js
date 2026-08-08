@@ -237,7 +237,18 @@ function noteFrontier(x, y){
 }
 
 function legalCells(tileId){
-  if(board.size === 0) return [{ x:0, y:0, rots:[0,1,2,3] }];
+  /* An empty pasture takes the opening tile anywhere, so the origin stands
+     for every cell — but it still has to go through canPlace rather than
+     being handed back unconditionally. A tile whose data the lookups cannot
+     resolve (an unregistered pack row) would otherwise be offered here with
+     all four rotations and then refused by placeTile, which reads as "the
+     tile is fine, the placement failed" and sends you hunting in the wrong
+     file. Four calls, once per game, and the two can never disagree. */
+  if(board.size === 0){
+    const rots = [];
+    for(let r = 0; r < 4; r++) if(canPlace(tileId, r, 0, 0)) rots.push(r);
+    return rots.length ? [{ x:0, y:0, rots }] : [];
+  }
   const codes = [0,1,2,3].map(r => codeFor(tileId, r));
   if(!codes[0]) return [];
   const out = [];

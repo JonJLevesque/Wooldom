@@ -27,72 +27,50 @@ function skip(label, why){
   skipped.push(label);
 }
 
-/* ---- 0. no two modules may declare the same top-level name ----
-   Every script tag shares one scope, and test/shim.js concatenates them into a
-   single eval, where two files declaring the same top-level const/let/class is
-   not a shadow but a hard SyntaxError that takes EVERY suite down at once — no
-   test output, just a parse failure. It has happened once already this wave
-   (render.js and ui.js both declaring `bannerText`). This is cheap, it is
-   static, and wave 3 adds five pack files to the same scope.
+/* ---- 0. page integrity: the window.* publish vector ----
+   test/boot.js owns the DECLARATION scan (two modules declaring one top-level
+   name — const/let/class dies loudly, function/var overwrites silently) and
+   runs it before load, so it is not repeated here.
 
-   It runs BEFORE the shim loads anything, deliberately: once the eval throws
-   there is no suite left to report, so a check that runs afterwards would only
-   ever pass. Its whole job is to name the colliding pair instead of leaving
-   somebody to read a SyntaxError with no file in it.
+   It cannot see this third vector. `window.X = ...` has no declaration keyword
+   to match, and the semantics are the same silent overwrite: the last module in
+   load order wins, with no error. Measured, by appending
+   `window.paintTile = function(){ return null; }` to render.js where art.js
+   publishes the real one — boot, tiledata, rules, placement, brook, saveload
+   and ai-smoke ALL stayed green, and this check was the only thing that caught
+   it. Indentation is NOT a proxy for "guarded": art.js and render.js publish
+   theirs indented inside an `if(typeof window!=='undefined')` environment
+   check, which guards nothing about ownership.
 
-   It covers `function` and `var` as well as `const`/`let`/`class`, and that is
-   the half that earns its keep — do NOT narrow it. const/let collide loudly
-   (SyntaxError, every suite down, self-announcing). function/var redeclaration
-   is LEGAL: the duplicate silently overwrites, last file in load order wins.
-
-   The quiet class is not uniformly quiet, and the distinction is the point.
-   Both measured here by appending a duplicate to render.js:
-     function canPlace(){}  (board.js owns it) -> rules, placement, brook,
-       saveload, ai-smoke and uiflow ALL go red immediately. A collision on a
-       name some suite asserts is caught for free; this scan adds nothing.
-     function drawLogo(){}  (art.js owns it)   -> boot, tiledata, rules,
-       placement, brook, saveload and ai-smoke ALL stay GREEN, with a core
-       painter replaced by an empty stub. Only this check caught it.
-   So the risk is not "function collisions"; it is collisions on names no
-   headless suite asserts — which is exactly the render/ui/audio surface, by
-   construction, because that surface is the part a headless suite cannot see.
-   A green suite is not evidence of no collision. */
+   The one intended duplicate has its GUARD asserted at runtime below rather
+   than its NAME allow-listed here — an allow-list keeps passing after the guard
+   that made it safe is deleted, which is the failure it would exist to catch. */
 (function(){
   const fs=require('fs'), path=require('path');
   const root=path.join(__dirname,'..');
   const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
-  const files=[...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map(m=>m[1]);
-  if(!files.length){ skip('no two modules declare the same top-level name','no script tags found'); return; }
-  /* Only column-0 declarations are top level: anything indented is inside a
-     function or a block and cannot collide. */
-  const declRe=/^(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/;
-  const listRe=/^(?:const|let|var)\s+(.+)$/;
-  const owner=new Map(), clashes=[];
+  const files=[...new Set([...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map(m=>m[1]))];
+  if(!files.length){ skip('no unexpected window.* export is published by two modules','no script tags found'); return; }
+  const pub=new Map();
   for(const f of files){
     let src='';
     try{ src=fs.readFileSync(path.join(root,f),'utf8'); }catch(e){ continue; }
-    const names=new Set();
-    for(const line of src.split('\n')){
-      if(/^\s/.test(line)) continue;
-      const d=declRe.exec(line);
-      if(d){ names.add(d[1]); }
-      const l=listRe.exec(line);
-      if(l) for(const part of l[1].split(',')){
-        const n=/^\s*([A-Za-z_$][\w$]*)\s*=/.exec(part);
-        if(n) names.add(n[1]);
-      }
-    }
-    for(const n of names){
-      if(owner.has(n) && owner.get(n)!==f) clashes.push(n+' in '+owner.get(n)+' and '+f);
-      else owner.set(n,f);
+    for(const m of src.matchAll(/^\s*window\.([A-Za-z_$][\w$]*)\s*=/gm)){
+      if(!pub.has(m[1])) pub.set(m[1], new Set());
+      pub.get(m[1]).add(f);
     }
   }
-  check('no two modules declare the same top-level name',
-    clashes.length===0, clashes.join('; '));
-  check('the scan actually looked at every module in index.html',
-    files.length>=8 && owner.size>200, files.length+' files, '+owner.size+' names');
+  const shared=[...pub.entries()].filter(([,fl])=>fl.size>1)
+    .map(([n,fl])=>n+' ('+[...fl].join(' and ')+')');
+  /* G is the one by design: ui.js publishes a menu placeholder ONLY when
+     game.js has not landed, so a page with a stubbed engine still boots to a
+     menu. Any OTHER shared export is two modules fighting over one name. */
+  const unexpected=shared.filter(r=>!r.startsWith('G ('));
+  check('no unexpected window.* export is published by two modules',
+    unexpected.length===0, unexpected.join('; ')+'  [all shared: '+(shared.join('; ')||'none')+']');
+  check('the window scan found the publishes it should have',
+    pub.size>=20 && pub.has('WoolDbg') && pub.has('View'), pub.size+' publishes');
 })();
-
 
 let app=null, err=null;
 try{ app=load(); }catch(e){ err=e; }
@@ -104,6 +82,16 @@ const ZOOMS=probe('ZOOMS')||[0.5,1,2];      // eval-scoped consts come through t
 const View=(global.window&&global.window.View)||probe('window.View');
 const U=D.ui;
 if(!check('ui.js augments WoolDbg with a ui namespace', !!U)) finish();
+
+/* The guard behind the one shared window.* export, tested rather than trusted.
+   ui.js publishes a placeholder G only when game.js has not landed; if that
+   condition ever inverts, the menu's stub silently replaces the engine's state
+   object and the game plays against a shell. The placeholder has no autoAI /
+   replaying / step, so their presence proves the engine's G is the one that
+   survived — this is the assertion an allow-list of the NAME would not make. */
+check('the engine owns window.G — ui.js\'s placeholder did not win',
+  !!G && G.autoAI!==undefined && G.replaying!==undefined && G.step!==undefined,
+  'G keys: '+Object.keys(G||{}).join(','));
 
 /* ---- 1. the screen state machine starts at the menu ---- */
 check('boots into the menu', U.state()==='menu' && U.menuView==='root');
