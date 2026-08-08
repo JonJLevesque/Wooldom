@@ -12,13 +12,23 @@
   <div id="topbar">
     <span class="gname">WOOLDOM</span>
     <span id="seatChips"></span>
-    <span class="stat">SATCHEL <b id="hSatchel">—</b></span>
+    <span class="stat">SATCHEL <b id="hSatchel">&mdash;</b></span>
     <span id="hModules"></span>
     <span id="hoverinfo"></span>
   </div>
   <div id="wrap">
+    <!-- the width/height attributes are the canvas's backing-store size and must
+         stay literal here: test/audio-smoke.js parses width="960" out of this
+         file, and ui.js/render.js derive the whole view transform from
+         cv.width/cv.height. CSS scales the element; it never sets these. -->
     <canvas id="cv" width="960" height="540" role="img"
             aria-label="The pasture board. Scores and the tile in hand are reported around it."></canvas>
+    <!-- the last three things that scored, folded away until asked for -->
+    <div id="movelog" class="collapsed">
+      <button id="logToggle" type="button" aria-expanded="false" aria-controls="logLines"
+              title="Show the last few scores">MOVES</button>
+      <div id="logLines"></div>
+    </div>
   </div>
   <div id="tray">
     <canvas id="trayCv" width="96" height="96" aria-hidden="true"></canvas>
@@ -35,7 +45,22 @@
   <div id="sr" class="vh" role="status" aria-live="polite"></div>
 
   <!-- settings popover -->
-  <div id="settings"></div>
+  <div id="settings">
+    <div class="setcard hidden" id="setcard" role="dialog" aria-label="Settings">
+      <div class="settitle">SETTINGS</div>
+      <div class="setrow"><label for="volSfx">SFX</label>
+        <input type="range" min="0" max="100" value="100" id="volSfx" class="vol">
+        <span class="setval" id="volSfxV">100</span></div>
+      <div class="setrow"><label for="volMus">MUSIC</label>
+        <input type="range" min="0" max="100" value="100" id="volMus" class="vol">
+        <span class="setval" id="volMusV">100</span></div>
+      <button class="sbtn" id="bCalm" type="button"
+        title="Calm mode: no shake, no pulsing, no flashes">CALM OFF</button>
+      <button class="sbtn warn" id="bReset" type="button"
+        title="Erase the saved game and settings">RESET PROGRESS</button>
+      <button class="sbtn" id="setClose" type="button">CLOSE</button>
+    </div>
+  </div>
 
   <!-- title / new game setup -->
   <div class="overlay" id="menu">
