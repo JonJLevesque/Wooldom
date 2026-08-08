@@ -211,13 +211,16 @@ shim.js+boot.js (Wave 0, done). Wave 1: tiledata (A), rules+placement+meadows
 (B), brook+saveload (C), audio-smoke (F), uiflow (E). Wave 2: ai-match (G).
 Wave 3: packs-<name> each. meadows.js MUST use an independent flood-fill
 scorer written from the rules text, importing nothing from board.js.
-Wave-3 brief notes: (0) BLOCKER — tiles.js exposes NO registration API:
-its index maps (_TILE_BY_ID/_EDGE_CODES/_SLOT_OWNER) are built in a load-time
-IIFE, so a pack's TILES.push() silently yields tileById→null, 0 legal cells,
-and the dead-tile rule discards every copy — the game looks healthy with the
-pack's content missing. tiles.js needs registerTiles(rows) (append + re-index)
-BEFORE the first pack agent starts; board.js needs nothing (it reads through
-the lookups). (1) the brook module now exercises NO brook↔fold or
+Wave-3 brief notes: (0) BLOCKER — tiles.js needs registerTiles(rows)
+(append + re-index _TILE_BY_ID/_EDGE_CODES/_SLOT_OWNER) AND a matching
+base-versus-registered split in tiledata's roster/count assertions — landing
+one without the other either breaks packs silently or forces the roster guard
+(the one we least want weakened) to be loosened. Design both together, BEFORE
+the first pack agent starts. Today a pack's TILES.push() yields tileById→null
+while legalCells shows ONE phantom cell on an empty board (looks placeable,
+never places, dead-tile rule discards) — tiledata's slotOwner cross-check DOES
+catch it and now names registerTiles as the fix in its failure message.
+board.js needs nothing (it reads through the lookups). (1) the brook module now exercises NO brook↔fold or
 brook↔lane adjacency — a pack reintroducing either walks fresh ground; test it
 directly. (2) A lane-over-water tile is forced into rim order B,L,B,L — two
 Lake-mines AND 180°-symmetric (placer cannot steer) — so any such tile belongs

@@ -116,10 +116,22 @@ check('tile ram flags agree with ram segments', ramMismatch.length === 0 && ramT
     });
     for(let s = 0; s < 12; s++) if(owner[s] === -1) bad.push(`${t.id}: slot ${s} unowned`);
 
-    // slotOwner() must report the same partition the data declares
+    // slotOwner() must report the same partition the data declares. A tile that
+    // is in the array but in NONE of the lookups reports -1 for all twelve, and
+    // that is a different bug with a different fix — say so rather than let a
+    // pack author debug segment data that is perfectly correct.
     const row = ownerRow(t.id);
-    for(let s = 0; s < 12; s++)
-      if(row[s] !== owner[s]) bad.push(`${t.id}: slotOwner(${s})=${row[s]}, segs say ${owner[s]}`);
+    if(row.every(v => v === -1) && !probe(`!!tileById(${JSON.stringify(t.id)})`)){
+      bad.push(`${t.id}: present in TILES/BROOK_TILES but invisible to tileById/edgeCode/` +
+               `slotOwner. indexTiles() runs ONCE at load, so a row pushed afterwards — a ` +
+               `js/pack-*.js file, which loads after tiles.js — is in the array and in no ` +
+               `index. Nothing throws: the tile simply never places and the dead-tile rule ` +
+               `discards it. Fix is a registerTiles(rows) in tiles.js that appends AND ` +
+               `re-indexes, not a change to this tile's segments.`);
+    } else {
+      for(let s = 0; s < 12; s++)
+        if(row[s] !== owner[s]) bad.push(`${t.id}: slotOwner(${s})=${row[s]}, segs say ${owner[s]}`);
+    }
 
     // side type ⇒ who owns that side's three slots
     for(let side = 0; side < 4; side++){
