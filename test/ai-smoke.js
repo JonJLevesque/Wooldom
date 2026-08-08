@@ -64,24 +64,38 @@ const SHEPHERDS  = P('SHEPHERDS');
 
 /* ============================ STATIC HALF ============================ */
 
-/* --- personalities: all four rows, at the design's weights (§6 table) --- */
+/* --- personalities: all four rows, at the SHIPPED weights ---
+   Three rows are the design §6 table untouched. Maud's two moved in the Wave-2
+   tuning pass (w_meadow 1.6 → 1.1, w_scar 0.7 → 1.3) and are pinned here at
+   their tuned values, with the design number alongside, so that a later edit
+   has to come past a failure that says which it is: a drift back to the design
+   table, or a fresh tuning decision. ai.js's header carries the measurements.
+   Maud's numbers are not free parameters — test/ai-match.js asserts the
+   behaviour they were chosen for (she keeps shepherds in hand and stays the
+   meadow specialist), so moving them without moving that suite fails there. */
 {
   const want = {
     wick: { w_now:1.0, w_pot:1.2, w_meadow:0.7, w_block:0.3, w_scar:1.0 },
     bram: { w_now:0.9, w_pot:0.8, w_meadow:0.8, w_block:1.5, w_scar:0.9 },
-    maud: { w_now:0.8, w_pot:0.9, w_meadow:1.6, w_block:0.5, w_scar:0.7 },
+    maud: { w_now:0.8, w_pot:0.9, w_meadow:1.1, w_block:0.5, w_scar:1.3 },
     pip:  { w_now:1.0, w_pot:1.1, w_meadow:0.5, w_block:0.4, w_scar:1.2 },
   };
+  const tuned = { 'maud.w_meadow':1.6, 'maud.w_scar':0.7 };   // what §6 said
   let ok = true, why = '';
   for(const k in want){
     const row = AI.PERSONALITIES[k];
     if(!row){ ok = false; why = 'missing personality ' + k; break; }
     for(const w in want[k]) if(row[w] !== want[k][w]){
-      ok = false; why = k + '.' + w + ' is ' + row[w] + ', design says ' + want[k][w]; break;
+      const was = tuned[k + '.' + w];
+      ok = false;
+      why = k + '.' + w + ' is ' + row[w] + ', wave 2 tuned it to ' + want[k][w] +
+            (was != null ? ' (design §6 said ' + was + ' — if this is a retune, ' +
+                           'move this row and ai.js\'s header together)' : '');
+      break;
     }
     if(!ok) break;
   }
-  check('four personalities carry the design weight vectors', ok, why);
+  check('four personalities carry the shipped weight vectors', ok, why);
   check('type bias: Old Wick folds x1.3, Pip lanes+shrines x1.4',
     AI.PERSONALITIES.wick.bias.fold === 1.3 &&
     AI.PERSONALITIES.pip.bias.lane === 1.4 && AI.PERSONALITIES.pip.bias.shrine === 1.4);
@@ -508,6 +522,179 @@ if(!engineReady){
       const h1 = D.stateHash();
       check('evaluation is side-effect free (500 evals, stateHash unchanged)',
         !evalErr && h0 === h1, evalErr || ('stateHash ' + h0 + ' → ' + h1));
+    }
+
+    /* ---- AI.plan(): the dry run ui.js draws its ghost from ----
+       ui.js needs to know where a seat MEANS to play while the board is still
+       untouched — aiMove is atomic, so by the time it returns the moment has
+       gone. aiMove therefore calls aiPlan and there is one selection path
+       rather than two that can drift; these are the properties that make it
+       safe to call from a renderer, and neither is free.
+
+       A mixed table with LAMB on the front seat, on purpose. Sigma is exactly
+       what a second argmax written in ui.js would have got wrong — with noise
+       that wide the noiseless best is often not the move played, so agreement
+       here is a real assertion rather than a tie any implementation would
+       have found.
+
+       All six were broken once to prove they fail: plan() made to draw, to
+       scribble on seat.ai, to carry a call counter, to have its pick ignored
+       by aiMove (the two-selection-paths bug this seam exists to prevent), and
+       to lose both absent-seat guards. Two of the six were WEAKER than they
+       read before that exercise, and both gaps were about WHEN the question is
+       asked rather than what is asked:
+         · the purity loop previews at the top of a turn, where a tile is
+           always in hand, so a plan() that drew was invisible to it — hence
+           the separate post-window check, the one state with an empty hand and
+           a full satchel;
+         · plan(99) on a FINISHED game returns null because the hand is empty,
+           not because seat 99 is absent, so it passed with the guard deleted —
+           hence the absent-seat check runs first, tile in hand. */
+    {
+      const S = global.window.G;
+      S.autoAI = false;
+      D.startGame({ seed:8642, modules:{ brook:true },
+        seats:[{ name:'A', human:false, personality:'maud', difficulty:'lamb' },
+               { name:'B', human:false, personality:'pip',  difficulty:'ram'  },
+               { name:'C', human:false, personality:'bram', difficulty:'ewe'  }] });
+
+      const snapAi = () => JSON.stringify(S.seats.map(s => s.ai || null));
+      let pureErr = null, agreeErr = null, stableErr = null, nullErr = null;
+      let planned = 0, postsPlanned = 0, missed = 0;
+
+      /* A seat that is not at the table, asked WHILE A TILE IS IN HAND. The
+         order matters and is the whole point: asking a finished game the same
+         question gets null because the hand is empty, so it would pass with
+         the seat guard deleted and prove nothing. Here the only reason to
+         answer null is that seat 99 does not exist. */
+      let seatGuard = true, seatWhy = '';
+      try{
+        if(S.drawn == null){ seatGuard = false; seatWhy = 'no tile in hand — vacuous'; }
+        else {
+          const h = D.stateHash();
+          if(AI.plan(99) !== null){ seatGuard = false; seatWhy = 'seat 99 got a plan'; }
+          else if(AI.plan(-1) !== null){ seatGuard = false; seatWhy = 'seat -1 got a plan'; }
+          else if(D.stateHash() !== h){ seatGuard = false; seatWhy = 'asking moved stateHash'; }
+        }
+      }catch(e){ seatGuard = false; seatWhy = 'threw: ' + (e.message || e); }
+      check('AI.plan refuses a seat that is not at the table, tile in hand',
+        seatGuard, seatWhy);
+
+      for(let n = 0; n < 80 && (S.mode === 'play' || S.mode === 'brook'); n++){
+        const seat = S.turnIdx | 0;
+        if(S.drawn == null){ nullErr = nullErr || ('turn ' + n + ': nothing in hand'); break; }
+
+        const h0 = D.stateHash(), rng0 = RNGmod.state;
+        const drawn0 = S.drawn, mv0 = S.moveNo, ai0 = snapAi();
+
+        const p1 = AI.plan(seat);
+        const p2 = AI.plan(seat);       // twice: the pick is a function of the position
+
+        if(!p1){ nullErr = nullErr || ('turn ' + n + ': plan() found no move for a drawn tile'); break; }
+        planned++;
+        if(JSON.stringify(p1) !== JSON.stringify(p2))
+          stableErr = stableErr || ('turn ' + n + ': two plans at one position disagree');
+
+        /* Purity, itemised. stateHash covers the board, the posts, the scores,
+           the supplies and RNG.state; the rest is the turn-local state a
+           preview could plausibly consume — the tile in hand most of all,
+           since a plan() that drew would eat the player's tile to draw a
+           ghost. */
+        if(D.stateHash() !== h0) pureErr = pureErr || ('turn ' + n + ': stateHash moved');
+        else if(RNGmod.state !== rng0) pureErr = pureErr || ('turn ' + n + ': RNG.state moved');
+        else if(S.drawn !== drawn0) pureErr = pureErr || ('turn ' + n + ': G.drawn moved');
+        else if(S.moveNo !== mv0) pureErr = pureErr || ('turn ' + n + ': G.moveNo moved');
+        else if(snapAi() !== ai0) pureErr = pureErr || ('turn ' + n + ': seat.ai was written');
+
+        const before = S.moveNo;
+        D.aiMove(seat);
+        if(S.moveNo === before) break;
+
+        /* Agreement is held against the LOG, not against seat.ai.plan.
+           seat.ai.plan is aiPlan's return value assigned, so comparing to it
+           would be comparing a value to itself; the log entry is what the real
+           input path received, so this asserts the previewed move is the move
+           that was actually played. */
+        const m = S.log[S.log.length - 1];
+        if(!m){ agreeErr = agreeErr || ('turn ' + n + ': no log entry after aiMove'); break; }
+        if(m.x !== p1.x || m.y !== p1.y || m.rot !== p1.rot)
+          agreeErr = agreeErr || ('turn ' + n + ': previewed ' + p1.x + ',' + p1.y +
+                                  ' rot ' + p1.rot + ' but played ' + m.x + ',' + m.y +
+                                  ' rot ' + m.rot);
+        if(p1.seg != null){
+          postsPlanned++;
+          if(m.s == null) missed++;                 // board.canPost refused; asserted below
+          else if(m.s !== p1.seg)
+            agreeErr = agreeErr || ('turn ' + n + ': previewed a herder on segment ' +
+                                    p1.seg + ' but seated one on ' + m.s);
+        }
+      }
+
+      check('AI.plan is published and pure  [' + planned + ' turns previewed]',
+        typeof AI.plan === 'function' && !pureErr && planned > 20,
+        pureErr || (typeof AI.plan !== 'function' ? 'AI.plan is not a function'
+                                                  : 'only ' + planned + ' turns — vacuous'));
+      check('AI.plan is stable at a position  [' + planned + ' double-calls]',
+        !stableErr, stableErr);
+      check('AI.plan predicts the move aiMove actually plays  [' + planned +
+            ' turns, ' + postsPlanned + ' of them posting, mixed difficulties]',
+        !agreeErr && !nullErr && planned > 20, agreeErr || nullErr);
+      /* A previewed post the engine then refuses would show the player a
+         herder that never arrives — the same divergence aiMove counts as
+         postMiss, asserted here from the outside. */
+      check('every previewed herder was one board.canPost accepted',
+        missed === 0, missed + ' previewed posts the input path refused');
+
+      /* THE POST WINDOW — an empty hand with a FULL satchel, and the only
+         state that catches a plan() which draws. The loop above never sees it:
+         it previews at the top of a turn, where a tile is always in hand, so
+         `G.drawn` merely has to stay unchanged. A finished game does not catch
+         it either — the satchel is empty there, so a plan() that drew would
+         find nothing to draw and look innocent. Here a draw would really pop a
+         tile, and the satchel depth is in stateHash. Reached through the real
+         input path: place a tile and stop inside the window it opens. */
+      {
+        const placeFn = P('place'), skipFn = P('skip');
+        S.autoAI = false;
+        D.startGame({ seed:24601, modules:{ brook:true },
+          seats:[{ name:'A', human:false, personality:'wick', difficulty:'ram' },
+                 { name:'B', human:false, personality:'maud', difficulty:'ewe' }] });
+        let windowSeen = false, winErr = null;
+        for(let n = 0; n < 40 && !windowSeen && (S.mode === 'play' || S.mode === 'brook'); n++){
+          const cands = D.legal();
+          if(!cands.length) break;
+          const c = cands[0];
+          if(!placeFn(c.x, c.y, c.rots[0])) break;
+          if(S.step === 'post'){
+            windowSeen = true;
+            const h = D.stateHash(), sat = (S.satchel || []).length, rng = RNGmod.state;
+            let p;
+            try{ p = AI.plan(S.turnIdx | 0); }
+            catch(e){ winErr = 'plan() threw inside the post window: ' + (e.message || e); break; }
+            if(p !== null) winErr = 'plan() invented a move with nothing in hand';
+            else if((S.satchel || []).length !== sat)
+              winErr = 'plan() DREW: satchel went ' + sat + ' → ' + (S.satchel || []).length;
+            else if(D.stateHash() !== h) winErr = 'plan() moved stateHash ' + h + ' → ' + D.stateHash();
+            else if(RNGmod.state !== rng) winErr = 'plan() moved RNG.state';
+          }
+          if(S.step === 'post') skipFn();
+        }
+        check('AI.plan draws nothing when the hand is empty and the satchel is not',
+          windowSeen && !winErr, winErr || 'never reached a post window — vacuous');
+      }
+
+      /* A renderer polling a finished game, or naming a seat that is not at
+         the table, must get null rather than a throw. */
+      let endSafe = true, endWhy = '';
+      try{
+        for(let n = 0; n < 400 && (S.mode === 'play' || S.mode === 'brook'); n++){
+          const b = S.moveNo; D.aiMove(S.turnIdx | 0); if(S.moveNo === b) break;
+        }
+        if(AI.plan(0) !== null){ endSafe = false; endWhy = 'a finished game still yields a plan'; }
+        if(AI.plan(99) !== null){ endSafe = false; endWhy = 'a seat that does not exist yields a plan'; }
+      }catch(e){ endSafe = false; endWhy = 'plan() threw: ' + (e.message || e); }
+      check('AI.plan returns null on a finished game and an absent seat, never throws',
+        endSafe, endWhy);
     }
 
     /* Competence, not just legality: the wave-1 bar is a seat worth playing

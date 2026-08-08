@@ -22,8 +22,46 @@
    differs only in what it is willing to pay for. `bias` multiplies the value
    of a feature CLASS in this seat's own eyes — it is a taste, so it is never
    applied when we estimate what an opponent thinks a feature is worth.
-   ⚑ Wave 1: only Old Wick is tuned. The other three carry their design
-   weights untouched and get their pass in Wave 2. */
+   ⚑ Wave 2 tuning pass. Maud's two weights moved; the other three still carry
+   their design numbers. Measured over a pairwise round-robin — every temper
+   against every other, both seat orders, at Ram — pooled over three seed sets,
+   720 games for Maud in each column. One set was used to tune; the other two
+   were held back and never fitted against, and agree to within a point:
+
+                    win%    mean    meadow share    in hand at mid-game
+     maud before     5.4%    72.9       42.2%              0.93
+     maud after     26.4%    91.2       33.2%              2.50
+
+   She also stops running dry: turns spent holding no shepherd at all fall from
+   41.9% to 18.0%, and her posts per game rise from 12.6 to 16.1 — the second
+   half of the game is hers to play again rather than to sit out.
+
+   Her failure was never that she liked meadows. It is that a meadow herder
+   NEVER comes home — meadows do not complete, so P=0 and the piece is spent
+   for the rest of the game — and w_scar 0.7 priced that permanence lower than
+   anyone else at the table. She bought five a game, was out of shepherds by
+   the halfway move, and spent 42% of her remaining turns holding nothing to
+   post with. w_scar 1.3 makes her the most careful seat about spending a
+   shepherd, which is the right instinct for the one temper whose signature
+   purchase is non-refundable; w_meadow 1.1 raises the bar a meadow must clear
+   without moving her off meadows. She remains the specialist on both measures
+   that matter: 4.5 meadow claims a game to Bram's 3.6, and much the largest
+   share of her points from grass (33% against Bram's 26%, Wick's 9%, Pip's
+   4%). One piece of her character did soften and is worth stating plainly
+   rather than burying — she used to seat herders at 0.32 satchel depletion,
+   clearly first at the table, and now does it at 0.44, level with Bram
+   (Wick 0.47, Pip 0.60). Making a shepherd expensive necessarily makes an
+   early one expensive; that is the cost of the fix, and it is why w_scar
+   stops at 1.3. Past 1.3 the win rate no longer responds at all and she
+   merely hoards, seating later and later for nothing. All of it reproduces on
+   two seed sets never used for tuning.
+
+   Measured but NOT taken, for a later wave to decide deliberately: Bram's real
+   handicap is w_pot 0.8, not w_block. Raising it to 0.9/1.0 is worth +6/+13
+   points of win rate to him, while w_block — his signature — is inert all the
+   way from 1.5 down to 0.9, every step inside noise. It is left alone because
+   it costs Maud 3.6 points of win rate, which drags her pooled confidence
+   interval down onto the 20% floor this pass had to clear. */
 const AI_PERSONALITIES = {
   wick: { key:'wick', house:'Steadwright', name:'Old Wick',
           blurb:'builds folds and finishes what he starts',
@@ -35,7 +73,8 @@ const AI_PERSONALITIES = {
           bias:{} },
   maud: { key:'maud', house:'Meadowlord', name:'Maud',
           blurb:'seats herders early and counts grass at the end',
-          w_now:0.8, w_pot:0.9, w_meadow:1.6, w_block:0.5, w_scar:0.7,
+          // w_meadow 1.6 → 1.1 and w_scar 0.7 → 1.3 in Wave 2; see the header.
+          w_now:0.8, w_pot:0.9, w_meadow:1.1, w_block:0.5, w_scar:1.3,
           bias:{} },
   pip:  { key:'pip',  house:'Waywalker',  name:'Pip',
           blurb:'runs the lanes and the shrines',
@@ -746,10 +785,73 @@ function aiNoise(sigma, seatIdx, candIdx){
   return sigma * Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
 }
 
+/* ---------------- choosing, without doing ----------------
+   The top half of a turn — enumerate, score, pick — with nothing done about
+   it. Returns the plan aiMove is about to act on, or null when there is no
+   tile in hand or nowhere to put it.
+
+   It exists as its own function because ui.js needs to show a ghost of where
+   the AI intends to play BEFORE the tile lands, and aiMove is atomic: by the
+   time it returns, the board has already changed and the moment is gone.
+   Rather than let ui.js run its own argmax — aiSigma and aiNoise are private
+   here, so it could only approximate one, and a second selection path would
+   disagree with this one the moment either changed — aiMove now calls this and
+   there is exactly one place a move is chosen.
+
+   PURE, and that is the whole contract: no board mutation (aiHypo never had
+   any), no draw, no G.drawn/G.moveNo, no seat.ai, and — the one that matters —
+   no RNG. One honest asterisk, stated here because a reader who finds it
+   unaided will stop trusting the paragraph: the search reaches meadow ledgers
+   through board.js's adjFoldRoots(), which CANONICALISES rootMeta.adjFolds in
+   place. That is path compression — the same lazy find() every featureAt call
+   already performs, idempotent, invisible to stateHash, and true of AI.moves
+   long before this function existed. Nothing a caller can observe changes; but
+   a purity test that deep-snapshots the root graph instead of comparing
+   stateHash will see that Set rewritten, and should not read it as a bug.
+   The difficulty noise is
+   hashed from (G.seed, G.moveNo, seatIdx, candidateIdx), so calling this and
+   then calling aiMove at the same G.moveNo picks the same candidate BY
+   CONSTRUCTION rather than by luck, and a preview cannot cost a resumed game
+   its bit-identical replay. test/ai-smoke.js holds both halves of that:
+   the purity, and the agreement with what aiMove actually plays. */
+function aiPlan(seatIdx, tileId){
+  if(!aiReady()) return null;
+  const seat = (G.seats || [])[seatIdx];
+  if(!seat) return null;
+  /* Deliberately does NOT draw. draw() pops the satchel, can retire a dead
+     tile and can close the brook phase — all real state changes, and a preview
+     that caused them would be a preview with consequences. beginTurn() has
+     already drawn by the time anything wants a ghost, so there is a tile in
+     hand; when there is not, that is an answer, not a thing to fix here. */
+  const id = tileId != null ? tileId : G.drawn;
+  if(id == null) return null;
+
+  const moves = aiMoves(seatIdx, id);
+  if(!moves.length) return null;      // dead tile: game.js owns the set-aside
+
+  /* Strictly greater, so the FIRST candidate of a tied maximum wins and the
+     enumeration order (cells, then rotation, then segment) is the tie-break.
+     Do not relax this to >=: ties are common on an open board, and which one
+     is taken is part of what every golden hash in test/ai-match.js records. */
+  const sigma = aiSigma(seat);
+  let best = null, bestV = -Infinity;
+  for(let i = 0; i < moves.length; i++){
+    const m = moves[i];
+    const v = m.v + aiNoise(sigma, seatIdx, i);
+    if(v > bestV){ bestV = v; best = m; }
+  }
+
+  return { x:best.x, y:best.y, rot:best.rot, seg:best.seg, v:best.v, noisy:bestV,
+           parts:{ now:best.now, pot:best.pot, meadow:best.meadow,
+                   denial:best.denial, scar:best.scar },
+           considered:moves.length, sigma,
+           personality:aiPersonalityKey(seat.personality) };
+}
+
 /* ---------------- the turn ----------------
-   Picks argmax of (eval + noise) and then plays it through the SAME functions
-   the pointer calls — place() then spot() or skip(). By the time the move
-   reaches board.js there is nothing to distinguish it from a clicked one.
+   Takes aiPlan's pick and plays it through the SAME functions the pointer
+   calls — place() then spot() or skip(). By the time the move reaches board.js
+   there is nothing to distinguish it from a clicked one.
    No time-based cutoff anywhere: a deadline would make the search depend on
    the machine it ran on, and replay saves would stop reproducing. */
 function aiMove(seatIdx){
@@ -763,26 +865,13 @@ function aiMove(seatIdx){
   const id = G.drawn;
   if(id == null){ seat.ai.plan = null; return null; }
 
-  const moves = aiMoves(seatIdx, id);
-  if(!moves.length){                  // dead tile: game.js owns the set-aside
+  const best = aiPlan(seatIdx, id);
+  if(!best){                          // dead tile: game.js owns the set-aside
     seat.ai.plan = null;
     seat.ai.ms = aiNow() - t0;
     return null;
   }
-
-  const sigma = aiSigma(seat);
-  let best = null, bestV = -Infinity;
-  for(let i = 0; i < moves.length; i++){
-    const m = moves[i];
-    const v = m.v + aiNoise(sigma, seatIdx, i);
-    if(v > bestV){ bestV = v; best = m; best.noisy = v; }
-  }
-
-  seat.ai.plan = { x:best.x, y:best.y, rot:best.rot, seg:best.seg, v:best.v, noisy:bestV,
-                   parts:{ now:best.now, pot:best.pot, meadow:best.meadow,
-                           denial:best.denial, scar:best.scar },
-                   considered:moves.length, sigma,
-                   personality:aiPersonalityKey(seat.personality) };
+  seat.ai.plan = best;
 
   const placed = place(best.x, best.y, best.rot);
   if(placed === false){ seat.ai.ms = aiNow() - t0; return null; }
@@ -823,6 +912,9 @@ const AI = {
   DIFFICULTY_ORDER: AI_DIFFICULTY_ORDER,
   hooks: { eval:[] },
   move: aiMove,
+  /* The dry run behind ui.js's ghost beat: the same pick aiMove is about to
+     make, with nothing done about it. See aiPlan. */
+  plan: aiPlan,
   moves: aiMoves,
   evalMove: aiEvalMove,
   hypo: aiHypo,

@@ -62,6 +62,18 @@ body{
 .chip.turn{border-color:var(--wool);background:#2a3626;box-shadow:0 0 0 1px var(--wool) inset}
 .chip.turn .nm{font-weight:bold}
 .chip.ai .nm{font-style:italic}
+/* the seat that is working, said on the chip the player is already reading.
+   The dots are DOM, so the mark survives calm mode by going still rather than
+   by disappearing — the state is the point, the motion only draws the eye. */
+.chip.think{border-color:var(--brook)}
+.chip .tk{display:inline-flex;align-items:center;gap:3px;line-height:1;
+  padding-right:3px;border-right:1px solid var(--slate)}
+.chip .tk i{display:block;width:4px;height:4px;border-radius:1px;
+  background:var(--brook);opacity:.3;
+  animation:think 1.05s ease-in-out infinite}
+.chip .tk i:nth-child(2){animation-delay:.18s}
+.chip .tk i:nth-child(3){animation-delay:.36s}
+@keyframes think{0%,100%{opacity:.3}35%{opacity:1}}
 #hModules{display:flex;gap:5px}
 .modchip{font-size:10px;letter-spacing:1px;color:var(--brook);border:1px solid var(--slate);
   border-radius:3px;padding:1px 5px}
@@ -72,7 +84,7 @@ body{
 /* ---- keyboard focus: one unmistakable gold ring, never on mouse clicks ---- */
 :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .sbtn:focus-visible,.dbtn:focus-visible,.bigbtn:focus-visible,.hx:focus-visible,
-.card:focus-visible,input.vol:focus-visible,#logToggle:focus-visible{
+.hs:focus-visible,.card:focus-visible,input.vol:focus-visible,#logToggle:focus-visible{
   outline:2px solid var(--focus);outline-offset:2px;
 }
 .dbtn:focus-visible{outline-offset:-2px}          /* segments touch: keep the ring inside */
@@ -100,6 +112,10 @@ canvas#cv.placing{cursor:crosshair}
 #logLines .ln b{color:var(--wool)}
 #logLines .ln i{color:var(--gold);font-style:normal}
 #movelog.collapsed #logLines{display:none}
+/* stood down for the reveal: render.js reserves a caption band along the bottom
+   of #cv for the walkthrough's arithmetic, and this overlay sits in the same
+   corner with nothing left to add while the counting narrates itself */
+#movelog.hidden{display:none}
 
 /* ---- the tray: the tile in hand, its name, and what you may do with it ---- */
 #tray{
@@ -123,11 +139,24 @@ canvas#cv.placing{cursor:crosshair}
   color:var(--brook);font-size:11px;letter-spacing:.5px;line-height:1.4;
   padding:7px 12px;min-height:34px;transition:opacity .3s ease;
 }
-#hintbar .ht{flex:1}
+#hintbar .ht{flex:1;min-width:0}
 #hintbar .hx{background:transparent;border:none;color:var(--lanolin);font-family:inherit;
-  font-size:13px;cursor:pointer;padding:2px 6px;min-height:32px}
+  font-size:13px;cursor:pointer;padding:2px 6px;min-height:32px;min-width:32px;flex:0 0 auto}
 #hintbar .hx:hover{color:var(--wool)}
 #hintbar.off{opacity:0;pointer-events:none}
+/* the same strip carries the first-game teaching hints, lit differently so a
+   thing being TAUGHT is never mistaken for the standing control reminder.
+   No entrance animation on purpose: this element's text is rewritten as the
+   game moves, and anything that replayed on each rewrite would twitch. */
+#hintbar.teach{background:#20301c;color:var(--wool);
+  box-shadow:inset 3px 0 0 var(--meadow), inset -3px 0 0 var(--meadow)}
+#hintbar.teach b{color:var(--gold)}
+#hintbar.teach em{color:var(--meadow);font-style:normal}
+#hintbar .hs{background:transparent;border:2px solid var(--slate);border-radius:4px;
+  color:var(--lanolin);font-family:inherit;font-size:10px;letter-spacing:1px;
+  padding:0 8px;min-height:32px;cursor:pointer;white-space:nowrap;flex:0 0 auto}
+#hintbar .hs:hover{color:var(--wool);border-color:var(--lanolin)}
+#hintbar .hs[hidden]{display:none}
 
 /* ---- bottom panel ---- */
 #panel{
@@ -149,6 +178,11 @@ canvas#cv.placing{cursor:crosshair}
 .sbtn.go:hover{background:rgba(140,196,92,.22);color:var(--wool)}
 .sbtn.armed{border-color:var(--barn);color:var(--barn-hi);background:rgba(192,80,58,.18);
   box-shadow:0 0 0 1px rgba(192,80,58,.5) inset;font-weight:bold;animation:blink 1s steps(2) infinite}
+/* a post option somebody already herds: greyed, but still a button — pressing
+   it says whose it is, which a disabled control could not do */
+.sbtn.off{color:#7d8474;border-color:#2b3328;background:#171e16}
+.sbtn.off:hover{color:var(--lanolin);border-color:var(--slate)}
+.sbtn.off .k{color:#6b7264}
 .sbtn.ico{padding:0 10px;font-size:14px;line-height:1}
 .sbtn .k{color:var(--dim);font-size:10px;margin-left:6px}
 .sbtn.go .k,.sbtn.on .k{color:inherit;opacity:.75}
@@ -178,7 +212,14 @@ input.vol{width:88px;accent-color:var(--wool);cursor:pointer;align-self:center;b
    edges, so the board you are about to play on is never fully hidden. */
 .overlay{
   position:absolute;inset:0;z-index:10;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+  display:flex;flex-direction:column;align-items:center;gap:14px;
+  /* centred while it fits, and pinned to the top when it does not. Plain
+     `center` overflows a scroll container equally at BOTH ends, which put the
+     first line of HOW TO PLAY above the scrollable area and out of reach; the
+     `safe` keyword falls back to flex-start exactly there. The unprefixed line
+     stays first for anything that does not understand it. */
+  justify-content:center;
+  justify-content:safe center;
   background:radial-gradient(ellipse 64% 76% at 50% 50%,
     rgba(14,18,12,.95) 0%, rgba(14,18,12,.90) 40%, rgba(14,18,12,.62) 100%);
   text-align:center;padding:20px;overflow-y:auto;
@@ -242,6 +283,19 @@ footer{margin-top:10px;font-size:11px;color:var(--dim);letter-spacing:1px;text-a
 .help b{color:var(--wool)}
 .help em{color:var(--brook);font-style:normal}
 .help p{margin-bottom:10px}
+/* the meadow rule, drawn. Nine divs rather than a canvas: the help page is
+   reachable before art.js has painted a single tile. Colours are the end
+   card's own legend swatches, so the picture and the scoreboard agree. */
+.mdiag{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:0 0 12px;
+  background:#182016;border:2px solid var(--slate);border-radius:5px;padding:10px 12px}
+.mgrid{display:grid;grid-template-columns:repeat(3,34px);grid-auto-rows:34px;gap:2px;flex:0 0 auto}
+.mc{display:flex;align-items:center;justify-content:center;border-radius:2px;
+  font-size:8px;letter-spacing:.5px;font-weight:bold;line-height:1}
+.mc.m{background:#7db661;color:#20300f}
+.mc.f{background:#f2ecdd;color:#3a3427}
+.mc.sh{color:#1b3a5c;font-size:15px;text-shadow:0 1px 0 rgba(255,255,255,.45)}
+.mcap{flex:1;min-width:190px;font-size:10px;line-height:1.7;color:var(--lanolin)}
+.mcap b{color:var(--gold)}
 
 /* ---- the end card ---- */
 #eTable{display:flex;flex-direction:column;gap:3px;min-width:560px;max-width:96vw}
@@ -264,6 +318,17 @@ footer{margin-top:10px;font-size:11px;color:var(--dim);letter-spacing:1px;text-a
   font-size:10px;letter-spacing:1px;color:var(--lanolin)}
 .bkey i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;
   border:1px solid #0006;font-style:normal}
+/* the biggest single score of the game — the thing a player retells, which the
+   ranked table has no row for */
+#eBest{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;
+  background:#1d2a18;border:2px solid var(--slate);border-radius:5px;
+  padding:8px 14px;font-size:11px;letter-spacing:1px;min-width:560px;max-width:96vw}
+#eBest[hidden]{display:none}
+#eBest .blbl{color:var(--dim);font-size:10px;letter-spacing:2px}
+#eBest .bwho{display:flex;align-items:center;gap:6px;color:var(--wool);font-weight:bold}
+#eBest .bwho .sw{width:9px;height:9px;border-radius:2px;border:1px solid #0008;flex:0 0 auto}
+#eBest .bval{color:var(--gold);font-size:16px;font-weight:bold}
+#eBest .bwhy{color:var(--lanolin);font-style:italic;letter-spacing:.5px}
 
 /* ---- mobile: every target clears 44px ---- */
 @media (max-width:720px){
@@ -279,25 +344,56 @@ footer{margin-top:10px;font-size:11px;color:var(--dim);letter-spacing:1px;text-a
   .dbtn{min-height:44px;min-width:44px;padding:0 10px;font-size:11px}
   input.vol{width:96px;min-height:44px}
   #settings{left:6px;right:6px;bottom:64px;width:auto}
-  #setupbox,#eTable{min-width:0;width:100%}
+  #setupbox,#eTable,#eBest{min-width:0;width:100%}
   .setuprow{flex-wrap:wrap}
   .nameinput,.seedinput{width:100%}
-  .erow{grid-template-columns:20px 1fr 56px;font-size:10px;letter-spacing:0}
-  .erow .bars{display:none}
+  /* The breakdown used to be hidden here, which threw away the one thing the
+     end card is FOR on the screen most likely to be showing it. It wraps onto
+     its own row under the seat instead. */
+  .erow{grid-template-columns:20px 1fr 56px;font-size:10px;letter-spacing:0;row-gap:5px}
+  .erow .rk{grid-column:1;grid-row:1}
+  .erow .who{grid-column:2;grid-row:1}
+  .erow .tot{grid-column:3;grid-row:1}
+  .erow .bars{grid-column:2/-1;grid-row:2}
+  .erow .bhead{display:none}
+  .erow.ehead{row-gap:0}
   #movelog{max-width:80%}
+  /* the key hints are desktop furniture: there is no ESC to press on a phone,
+     and dropping them is what lets the whole control row stay on ONE line
+     instead of orphaning the fullscreen button onto a second */
+  .sbtn .k{display:none}
+  /* every remaining tap target clears the 44px floor */
+  #logToggle{min-height:44px;min-width:44px;font-size:11px}
+  /* the text takes the full width and the two buttons drop beneath it —
+     sharing the line squeezed a four-line hint into eight */
+  #hintbar{padding:6px 8px;flex-wrap:wrap;row-gap:6px}
+  #hintbar .ht{flex:1 1 100%;min-width:100%}
+  #hintbar .hx{min-height:44px;min-width:44px;font-size:15px;margin-left:auto}
+  #hintbar .hs{min-height:44px;padding:0 10px}
+  .bigbtn{min-height:44px;padding:12px 20px}
+  #eBest{font-size:10px;padding:8px 10px}
 }
 
 /* ---- reduced motion: the OS preference, and the in-game CALM toggle ----
    ui.js mirrors G.calm onto body.calm so the setting works even when the OS
-   preference says otherwise. Canvas-side pulsing is capped in render.js. */
+   preference says otherwise. Canvas-side pulsing is capped in render.js.
+
+   THE AUDIT: this file's only moving parts are the armed-reset blink, the hint
+   strip's fade, the big buttons' hover lift, and the thinking dots — all four
+   are listed below under both switches. The rule every one of them follows is
+   that stillness must not cost information: the armed button keeps its red, the
+   hint keeps its text, and the thinking dots stay on the chip at a legible
+   opacity instead of vanishing with their animation. */
 @media (prefers-reduced-motion:reduce){
   .sbtn.armed{animation:none}
   .card:hover,.bigbtn:hover,.bigbtn:active{transform:none}
   #hintbar{transition:none}
+  .chip .tk i{animation:none;opacity:.85}
 }
 body.calm .sbtn.armed{animation:none}
 body.calm .bigbtn:hover,body.calm .bigbtn:active{transform:none}
 body.calm #hintbar{transition:none}
+body.calm .chip .tk i{animation:none;opacity:.85}
 
 /* ---- fullscreen: the stage owns the screen, its bars centred at the board's
    width. ui.js sets --fsw to the snapped canvas width so chrome tracks it. ---- */

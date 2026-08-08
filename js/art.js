@@ -208,6 +208,18 @@ const SPRITES = {
            'owwwwwko',
            '.owwwwo.',
            '..k..k..' ] },
+  /* a tuft of wool, for the puff a shepherd leaves when it walks home off a
+     feature that has just scored. It carries the sheep's own grey outline for
+     one reason: cream wool over the cream floor of a pen is invisible, and a
+     pen is exactly where a scoring shepherd tends to be standing. */
+  puff: { w:8, h:6,
+    pal:{ o:'#4a423a', w:'#fdfbf4', s:'#ddd7c8' },
+    rows:[ '..oo.oo.',
+           '.owwowwo',
+           'owwwwwwo',
+           'owwwwsso',
+           '.owwsso.',
+           '..oooo..' ] },
   hut: { w:8, h:7,
     pal:{ o:PAL.ink, r:PAL.shrineRoof, s:PAL.shrine, d:'#3b322a' },
     rows:[ '..oooo..',
@@ -715,7 +727,14 @@ function artPaintTile(id){
   }
   for(const f of folds) artPaintFold(buf, f.mask, f.dist, seed+f.i*29);
 
-  /* --- the flock, and the ram emblem if this is a prize tile --- */
+  /* --- the flock, and the ram emblem if this is a prize tile ---
+     Positions only. Sheep, huts, rams and the shrine are the things on a tile
+     that have an UP, and the tile itself is rotated by remapping the pixel
+     buffer, so painting them here would turn a hut on its side and stand a
+     shrine on its roof (it did — SHRINE at rot 2 was upside down on the board).
+     They are collected as canonical coordinates and stamped after the rotation
+     instead, upright, at the rotated spot. */
+  const props=[];
   for(const f of folds){
     let area=0;
     for(let k=0;k<f.mask.length;k++) if(f.mask[k]) area++;
@@ -725,21 +744,18 @@ function artPaintTile(id){
       const r=artInteriorSpots(f.mask, f.dist, seed+3, 1, 6, 12, avoid, 6);
       if(r.length){
         avoid.push([r[0][0], r[0][1]]);
-        // a one-pixel drop shadow is the whole reason the emblem reads as a
-        // badge on the pen floor instead of a smudge of gold
-        artSprite(buf,'ram', r[0][0]-3, r[0][1]-3, 0.35);
-        artSprite(buf,'ram', r[0][0]-4, r[0][1]-4);
+        props.push({ kind:'ram', x:r[0][0], y:r[0][1] });
       }
     }
     if(area>820){
       const h=artInteriorSpots(f.mask, f.dist, seed+11, 1, 8, 16, avoid, 6);
-      if(h.length){ artSprite(buf,'hut', h[0][0]-4, h[0][1]-4); avoid.push([h[0][0],h[0][1]]); }
+      if(h.length){ props.push({ kind:'hut', x:h[0][0], y:h[0][1] }); avoid.push([h[0][0],h[0][1]]); }
     }
     // the flock is what stops a big pen reading as empty ground, so it scales
     // with how much floor there is to fill
     const want = area>760 ? 4 : area>380 ? 3 : 2;
     for(const s of artInteriorSpots(f.mask, f.dist, seed+7, want, 5, 10, avoid, 5))
-      artSprite(buf,'sheep', s[0]-4, s[1]-3);
+      props.push({ kind:'sheep', x:s[0], y:s[1] });
   }
 
   /* --- the hub every path routes through --- */
@@ -854,11 +870,35 @@ function artPaintTile(id){
     }
   }
 
-  if(shrineSeg && shrineSeg.spot) artShrine(buf, shrineSeg.spot[0], shrineSeg.spot[1], seed);
-  return buf;
+  if(shrineSeg && shrineSeg.spot)
+    props.push({ kind:'shrine', x:shrineSeg.spot[0], y:shrineSeg.spot[1] });
+  return { buf, props, seed };
+}
+/* the props, upright, at wherever the rotation put their anchor. artRotSpot is
+   the same function render.js uses to place a shepherd on a rotated tile, so a
+   sheep and the shepherd standing beside it cannot end up disagreeing about
+   which way the tile turned. */
+function artStampProps(buf, props, rot, seed){
+  for(const p of props){
+    const a=artRotSpot(p.x, p.y, rot), x=a[0], y=a[1];
+    if(p.kind==='shrine') artShrine(buf, x, y, seed);
+    else if(p.kind==='ram'){
+      // a one-pixel drop shadow is the whole reason the emblem reads as a
+      // badge on the pen floor instead of a smudge of gold
+      artSprite(buf,'ram', x-3, y-3, 0.35);
+      artSprite(buf,'ram', x-4, y-4);
+    }
+    else if(p.kind==='hut')   artSprite(buf,'hut',   x-4, y-4);
+    else if(p.kind==='sheep') artSprite(buf,'sheep', x-4, y-3);
+  }
 }
 
 const artBaseCache = new Map(), artTileCache = new Map();
+function artCopyBuf(src){
+  const out=artNewBuf(src.w, src.h);
+  out.d.set(src.d);
+  return out;
+}
 function paintTile(tileId, rot){
   rot = ((rot|0)%4+4)%4;
   const key = tileId+'_'+rot;
@@ -867,10 +907,18 @@ function paintTile(tileId, rot){
   let base = artBaseCache.get(tileId);
   if(!base){
     try{ base = artPaintTile(tileId); }
-    catch(e){ base = artNewBuf(); artFill(base, artRGB(PAL.meadow)); }
+    catch(e){
+      const b=artNewBuf(); artFill(b, artRGB(PAL.meadow));
+      base = { buf:b, props:[], seed:0 };
+    }
     artBaseCache.set(tileId, base);
   }
-  c = artCanvasFromBuf(artRotBuf(base, rot));
+  // artRotBuf hands back the source itself at rot 0, and the props are stamped
+  // into whatever it returns — without the copy, rot 0 would paint its sheep
+  // into the shared base and every other rotation would inherit them
+  const buf = rot ? artRotBuf(base.buf, rot) : artCopyBuf(base.buf);
+  artStampProps(buf, base.props, rot, base.seed);
+  c = artCanvasFromBuf(buf);
   artTileCache.set(key, c);
   return c;
 }
@@ -906,21 +954,26 @@ const SHEP_ART = {
           'olccccccdo',
           '.olcccddoo',
           '..ooooooo.' ],
-  ministand:[ '..oo..',
-              '.ohho.',
-              'ooooow',
-              '..ff.w',
-              '.occdw',
-              '.occdw',
-              '.od.dw',
-              '.oo.ow' ],
-  miniseat: [ '..oo..',
-              '.ohho.',
-              'ooooo.',
-              '..ff..',
-              '.occd.',
-              'occccd',
-              '.ooooo' ],
+  /* The 0.5 zoom is where a seat is hardest to tell apart: a tile is 32px, the
+     meadow under it is dithered, and the first mini spent four pixels on the
+     seat colour and the rest on outline. These are a column wider and a row
+     shorter — the hat loses its crown and the torso gains a row — so the colour
+     block is a dozen pixels with a lit and a shaded edge, and WHOSE shepherd it
+     is survives the scale. The ink brim still carries the silhouette. */
+  ministand:[ '.ohhho.',
+              'ooooooo',
+              '..ff..w',
+              '.olccdw',
+              '.olccdw',
+              '.olccdw',
+              '.od.ddw',
+              '.oo.oo.' ],
+  miniseat: [ '.ohhho.',
+              'ooooooo',
+              '..ff...',
+              '.olccdo',
+              'olccccd',
+              '.oooooo' ],
 };
 const artShepCache = new Map();
 function artShepCanvas(color, kind){

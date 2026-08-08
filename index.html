@@ -35,14 +35,23 @@
     <div id="trayInfo"></div>
     <div id="trayBtns"></div>
   </div>
+  <!-- one strip, two jobs: the standing control reminder, and — over the top of
+       it during a first game — the contextual teaching hints. #hintSkip only
+       appears while a teaching hint is up, and turns the whole flow off. -->
   <div id="hintbar" class="off">
     <span class="ht" id="hintText"></span>
+    <button id="hintSkip" class="hs" type="button" hidden
+            title="Stop showing first-game hints">NO MORE HINTS</button>
     <button id="hintClose" class="hx" type="button" title="Got it">&#10005;</button>
   </div>
   <div id="panel"></div>
 
-  <!-- spoken, not seen -->
+  <!-- spoken, not seen. Two regions, one owner each: #sr carries the turn and
+       the board's answers, #srHint carries the teaching hints. Sharing one
+       meant whichever wrote last won, and the banner writes last every frame —
+       so the tutorial was announced to nobody. -->
   <div id="sr" class="vh" role="status" aria-live="polite"></div>
+  <div id="srHint" class="vh" role="status" aria-live="polite"></div>
 
   <!-- settings popover -->
   <div id="settings">
@@ -56,6 +65,10 @@
         <span class="setval" id="volMusV">100</span></div>
       <button class="sbtn" id="bCalm" type="button"
         title="Calm mode: no shake, no pulsing, no flashes">CALM OFF</button>
+      <button class="sbtn" id="bSkipAI" type="button"
+        title="Skip the pause before each AI move — the move itself is unchanged">SKIP AI ANIMATION OFF</button>
+      <button class="sbtn" id="bHints" type="button"
+        title="Show the first-game teaching hints again">HINTS ON</button>
       <button class="sbtn warn" id="bReset" type="button"
         title="Erase the saved game and settings">RESET PROGRESS</button>
       <button class="sbtn" id="setClose" type="button">CLOSE</button>
@@ -76,6 +89,7 @@
     <h2 class="ovtitle" id="eTitle"></h2>
     <div class="ovsub" id="eStats"></div>
     <div id="eTable"></div>
+    <div id="eBest" class="best" hidden></div>
     <div class="hint" id="eHint"></div>
     <div class="btnrow">
       <button class="bigbtn" id="eAgain" type="button">PLAY AGAIN</button>

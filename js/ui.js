@@ -289,12 +289,28 @@ function setZoomIdx(ni,sx,sy){
   return true;
 }
 function zoomStep(dir,sx,sy){ return setZoomIdx(zoomIdx()+(dir<0?-1:1), sx, sy); }
-/* a pinch reports a continuous ratio; the board only has three zooms, so the
-   nearest step wins and the gesture snaps to it */
-function zoomTo(z,sx,sy){
+/* Nearest step measured in LOG space, because zoom is a ratio: halfway between
+   0.5× and 1× is 0.707×, not 0.75×, and the linear reading made the lower half
+   of every pinch feel dead. */
+function zoomNearest(z){
   let bi=0,bd=Infinity;
-  for(let i=0;i<ZOOMS.length;i++){ const d=Math.abs(ZOOMS[i]-z); if(d<bd){ bd=d; bi=i; } }
-  return setZoomIdx(bi,sx,sy);
+  for(let i=0;i<ZOOMS.length;i++){
+    const d=Math.abs(Math.log(ZOOMS[i]/Math.max(z,1e-6)));
+    if(d<bd){ bd=d; bi=i; }
+  }
+  return bi;
+}
+/* A pinch reports a continuous ratio and the board has three zooms, so the
+   gesture snaps. The deadband is not polish: fingers holding still on the
+   boundary jitter by a pixel either way, and without it the board strobes
+   between two zoom steps at frame rate for as long as they rest there. */
+const UI_PINCH_DEAD=0.12;                 // log units clear of the midpoint
+function zoomTo(z,sx,sy){
+  const i=zoomIdx(), ni=zoomNearest(z);
+  if(ni===i) return false;
+  const mid=Math.sqrt(ZOOMS[i]*ZOOMS[ni]);
+  if(Math.abs(Math.log(Math.max(z,1e-6)/mid))<UI_PINCH_DEAD) return false;
+  return setZoomIdx(ni,sx,sy);
 }
 
 /* ---------------- 4. THE TILE IN HAND ----------------
@@ -340,11 +356,16 @@ function cellRotOk(x,y,r){
   const c=uiLegal.byKey.get(cellKey(x,y));
   return !!(c && c.rots && c.rots.indexOf(r)>=0);
 }
+/* The ghost has two authors and only one of them is the pointer. While the
+   pasture is showing where it means to play, a stray mouse move must not wipe
+   the preview out from under it — and on a touch screen the armed first tap has
+   to survive the pointerleave that follows a lift. */
 function setGhost(x,y){
-  if(!UiEng.drawn() || !placingNow()){ G.ghost=null; return; }
+  if(uiAiGhostOn()) return;
+  if(!UiEng.drawn() || !placingNow()){ if(!uiArmed) G.ghost=null; return; }
   G.ghost={ x, y, rot:uiRot, legal:cellRotOk(x,y,uiRot) };
 }
-function clearGhost(){ G.ghost=null; }
+function clearGhost(){ if(uiAiGhostOn()) return; G.ghost=null; }
 
 /* Rotate auto-advances past rotations that fit nowhere on the board: a player
    should never have to press R four times to find the one that works. */
@@ -393,6 +414,11 @@ function panX(cx){
 function tryPlaceAt(x,y){
   if(!placingNow()) return false;
   if(!cellRotOk(x,y,uiRot)){ badPlace(x,y); return false; }
+  /* cleared BEFORE the engine runs, never after: place() resolves the turn
+     inside itself, so a completion this very tile causes sets the flag on the
+     way through and a clear afterwards would wipe the hint it just earned */
+  hintFlags.completed=false;
+  uiArmed=null;
   const id=UiEng.drawn(), who=UiEng.seatName(UiEng.turnIdx());
   const r=UiEng.place(x,y,uiRot);
   // game.js's place() sounds its own refusal; ours would be the second one
@@ -470,13 +496,33 @@ function postSkip(){
   return true;
 }
 const UI_KIND={m:'meadow', l:'lane', f:'fold', s:'shrine', b:'brook'};
+/* how many canvas pixels one CSS pixel is worth — the canvas is a fixed 960
+   wide and CSS scales the element, so on a phone one finger-width of screen is
+   two and a half canvas pixels' worth of target */
+function cssToCanvas(){
+  const r=(uiCv && uiCv.getBoundingClientRect) ? uiCv.getBoundingClientRect() : null;
+  const w=r && r.width;
+  return (w>0) ? (canvasW()/w) : 1;
+}
+/* NEAREST disc, not the first one within reach. The forgiving radius a finger
+   needs is wide enough that two discs on one tile overlap, and first-match
+   would then hand every tap in the overlap to whichever segment the tile
+   happens to list first. Nearest-wins makes the enlargement safe; it is capped
+   at a little over half a tile so a tap off the tile still misses everything.
+   The DRAWN radius is untouched — render.js's disc and this test stay one
+   thing, which is what makes the picture the target. */
 function discAt(sx,sy){
-  const r=View.discR()+2;                       // a couple of px of forgiveness
+  const drawn=View.discR()+2;                   // a couple of px of forgiveness
+  const want=22*cssToCanvas();                  // 44 CSS px across, in canvas px
+  const r=Math.max(drawn, Math.min(want, View.px()*0.55));
+  const r2=r*r;
+  let best=null, bd=Infinity;
   for(const o of postOpts()){
     const p=View.spot(o.x,o.y,o.rot,o.spot);
-    if((sx-p[0])*(sx-p[0])+(sy-p[1])*(sy-p[1]) <= r*r) return o;
+    const d=(sx-p[0])*(sx-p[0])+(sy-p[1])*(sy-p[1]);
+    if(d<=r2 && d<bd){ bd=d; best=o; }
   }
-  return null;
+  return best;
 }
 
 /* Tab walks the legal cells in reading order, and the camera goes with it —
@@ -505,6 +551,33 @@ function tabCycle(dir){
    functions below are the input path, and the debug hooks call them directly. */
 let uiPtrs=new Map(), uiPan=null, uiDragging=false, uiPinch=null;
 
+/* ---- coarse pointers ----
+   A finger has no hover and no pixel to speak of, so the same tap that a mouse
+   can afford to treat as a decision has to be split in two: the first tap
+   PROPOSES (the ghost appears, the tray says what will happen, LAY IT lights),
+   the second COMMITS. Both laying a tile and posting a shepherd are permanent,
+   which is the whole argument for it. The keyboard and the tray buttons are
+   already explicit, so they commit on the first press and never arm.
+   Which kind of pointer we are on follows the last one used, not the device: a
+   laptop with a touchscreen should behave like a mouse until a finger arrives. */
+let uiCoarse=!!(mq('(pointer: coarse)') && mq('(pointer: coarse)').matches);
+let uiCoarseForced=null;                  // tests and the debug hook override
+let uiArmed=null;                         // {kind:'cell'|'post', key, n}
+function twoTap(){ return (uiCoarseForced===null) ? uiCoarse : uiCoarseForced; }
+function notePointer(e){
+  if(uiCoarseForced!==null) return;
+  const t=e && e.pointerType;
+  if(typeof t==='string' && t) uiCoarse=(t!=='mouse');
+}
+function armedFor(kind,key){ return !!(uiArmed && uiArmed.kind===kind && uiArmed.key===key); }
+function arm(kind,key,n){ uiArmed={kind,key,n:(n==null?null:n)}; updateTray(); updateHint(); }
+function disarm(){
+  if(!uiArmed) return false;
+  uiArmed=null;
+  updateTray(); updateHint();
+  return true;
+}
+
 function canvasPos(e){
   const r=(uiCv && uiCv.getBoundingClientRect) ? uiCv.getBoundingClientRect()
         : {left:0,top:0,width:canvasW(),height:canvasH()};
@@ -518,6 +591,7 @@ function uiDown(sx,sy,id){
     uiPinch={ d0:Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y)||1, z0:uiView().zoom,
               mx:(p[0].x+p[1].x)/2, my:(p[0].y+p[1].y)/2 };
     uiPan=null; uiDragging=false;
+    disarm();                              // a second finger is a gesture, not a tap
     return;
   }
   if(uiPtrs.size>2) return;
@@ -530,42 +604,87 @@ function uiMove(sx,sy,id){
   if(uiPinch && uiPtrs.size>=2){
     const p=[...uiPtrs.values()];
     const d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y)||1;
-    zoomTo(uiPinch.z0*(d/uiPinch.d0), uiPinch.mx, uiPinch.my);
+    const mx=(p[0].x+p[1].x)/2, my=(p[0].y+p[1].y)/2;
+    /* the anchor rides between the fingers rather than sitting where they first
+       landed, so a pinch that also slides keeps the same patch of grass under
+       it — which is the whole reason to anchor a zoom at all */
+    if(mx!==uiPinch.mx || my!==uiPinch.my){
+      const S=View.px(), v=uiView();
+      v.cx-=(mx-uiPinch.mx)/S; v.cy-=(my-uiPinch.my)/S;
+      uiPinch.mx=mx; uiPinch.my=my;
+      clampView();
+    }
+    zoomTo(uiPinch.z0*(d/uiPinch.d0), mx, my);
     return;
   }
   if(uiPan){
     const dx=sx-uiPan.sx, dy=sy-uiPan.sy;
-    if(!uiDragging && Math.hypot(dx,dy)>UI_DRAG_PX){ uiDragging=true; G.dragging=true; setCursor(); }
+    if(!uiDragging && Math.hypot(dx,dy)>UI_DRAG_PX){
+      uiDragging=true; G.dragging=true; disarm(); setCursor();
+    }
     if(uiDragging){
       const p=View.px(), v=uiView();
       v.cx=uiPan.cx-dx/p; v.cy=uiPan.cy-dy/p;
       clampView();
+      setHover(null);                      // a pan is not a hover
       return;
     }
   }
   const c=View.cellAt(sx,sy);
+  setHover(c);
   setGhost(c[0],c[1]);
+}
+/* G.hover — the board cell under the pointer, published for render.js, which
+   marks it in the moments there is no ghost to mark instead (the post window,
+   an AI's turn, no tile in hand). Integer cells or null; render draws nothing
+   when it is absent, so it is safe for it to be absent often. It is absent
+   during a drag (a pan is not a hover) and off the game screen. */
+function setHover(c){
+  G.hover = (c && uiScreen()==='game') ? {x:c[0]|0, y:c[1]|0} : null;
 }
 function uiUp(sx,sy,id){
   uiPtrs.delete(id==null?1:id);
   if(uiPtrs.size<2) uiPinch=null;
   const wasDrag=uiDragging;
   uiPan=null; uiDragging=false; G.dragging=false; setCursor();
-  if(wasDrag) return false;
+  if(wasDrag){ setHover(null); return false; }
   return uiClick(sx,sy);
 }
 function uiCancel(){
-  uiPtrs.clear(); uiPan=null; uiPinch=null; uiDragging=false; G.dragging=false; setCursor();
+  uiPtrs.clear(); uiPan=null; uiPinch=null; uiDragging=false; G.dragging=false;
+  setHover(null); setCursor();
 }
 /* a click on the board means whichever of the two things is currently on offer */
 function uiClick(sx,sy){
   if(uiScreen()!=='game') return false;
+  /* a tap while the pasture is playing means "get on with it" — it collapses
+     the remaining waits up to your own turn, and changes no move */
+  if(!UiEng.humanTurn()){ uiAiSkip=true; return false; }
+
   if(postingNow()){
     const d=discAt(sx,sy);
-    if(d) return postDisc(d.n);
+    if(!d){ disarm(); return false; }
+    if(!d.ok){ disarm(); return postDisc(d.n); }   // postDisc says why it refused
+    if(twoTap() && !armedFor('post',d.n)){
+      arm('post',d.n,d.n);
+      uiSpeak('post on the '+(UI_KIND[d.kind]||'feature')+'? tap it again to confirm');
+      snd('ui');
+      return false;
+    }
+    disarm();
+    return postDisc(d.n);
+  }
+
+  const c=View.cellAt(sx,sy), k=cellKey(c[0],c[1]);
+  if(twoTap() && placingNow() && !armedFor('cell',k)){
+    if(!cellRotOk(c[0],c[1],uiRot)){ disarm(); badPlace(c[0],c[1]); return false; }
+    setGhost(c[0],c[1]);
+    arm('cell',k);
+    uiSpeak('the tile fits at '+c[0]+', '+c[1]+'. Tap again to lay it.');
+    snd('ui');
     return false;
   }
-  const c=View.cellAt(sx,sy);
+  disarm();
   return tryPlaceAt(c[0],c[1]);
 }
 function setCursor(){
@@ -587,6 +706,20 @@ function uiSpeak(msg){
   if(msg===spoken) return;
   spoken=msg; sr.textContent=msg;
 }
+/* The teaching hints get a live region of their OWN. They shared #sr at first,
+   and lost every time: updateChrome writes the turn banner last, on every
+   frame, so a hint announced at the top of the call was gone by the bottom of
+   it. Two regions with one writer each need no arbitration and cannot race. */
+let spokenHint='';
+function uiSpeakHint(html){
+  const sr=el('srHint');
+  if(!sr) return;
+  const msg=String(html||'').replace(/<[^>]*>/g,'')
+    .replace(/&middot;/g,'.').replace(/&nbsp;/g,' ')
+    .replace(/\s+/g,' ').trim();
+  if(msg===spokenHint) return;
+  spokenHint=msg; sr.textContent=msg;
+}
 function logLine(html){
   uiLog.push(html);
   if(uiLog.length>12) uiLog.shift();
@@ -605,6 +738,20 @@ function toggleLog(on){
   logOpen = (on===undefined) ? !logOpen : !!on;
   drawLog();
 }
+/* The move log is a DOM overlay on the board's bottom-left corner, and
+   render.js reserves a caption band along the bottom of #cv for the reveal
+   walkthrough's arithmetic. They would sit on top of each other. The log is the
+   one with nothing to say during the counting — it reports the last few things
+   that scored, which is exactly what the walkthrough is narrating in full — so
+   it stands down for the duration and comes back on the end card. */
+let logHidden=false;
+function updateLogVisibility(){
+  const away=(UiEng.mode()==='reveal');
+  if(away===logHidden) return;
+  logHidden=away;
+  const ml=el('movelog');
+  if(ml && ml.classList) ml.classList.toggle('hidden', away);
+}
 
 function shepherdPips(s){
   const left=(s && s.supply!=null) ? (s.supply|0) : SHEPHERDS;
@@ -615,22 +762,36 @@ function buildChips(){
   if(!box) return;
   box.innerHTML='';
   const seats=UiEng.seats(), turn=UiEng.turnIdx();
+  const thinking=uiAiThinking() ? turn : -1;
   seats.forEach((s,i)=>{
-    const c=mkEl('div','chip'+(i===turn?' turn':'')+(s.human?'':' ai'));
+    const busy=(i===thinking);
+    const c=mkEl('div','chip'+(i===turn?' turn':'')+(s.human?'':' ai')+(busy?' think':''));
     const sw=mkEl('span','sw'); if(sw.style) sw.style.background=UiEng.seatColor(i);
     c.appendChild(sw);
     c.appendChild(mkEl('span','nm', String(s.name||('SEAT '+(i+1))).toUpperCase()));
+    /* The seat that is working says so on its own chip, where the player is
+       already looking to see whose turn it is. Three SQUARES, drawn in CSS
+       rather than written as characters: the shepherd pips right beside them
+       are round dots, and a row of round dots next to a row of round dots reads
+       as one number nobody can parse. Shape and colour both differ, so the two
+       cannot be confused even at a glance or in monochrome. */
+    if(busy){
+      const t=mkEl('span','tk');
+      t.appendChild(mkEl('i')); t.appendChild(mkEl('i')); t.appendChild(mkEl('i'));
+      attr(t,'aria-hidden','true');
+      c.appendChild(t);
+    }
     c.appendChild(mkEl('span','pips', shepherdPips(s)));
     c.appendChild(mkEl('span','sc', String(s.score|0)));
     attr(c,'aria-label', (s.name||('seat '+(i+1)))+', '+(s.score|0)+' points, '
       +((s.supply!=null?s.supply:SHEPHERDS)|0)+' shepherds in hand'
-      +(i===turn?', playing now':''));
+      +(i===turn?(busy?', thinking':', playing now'):''));
     box.appendChild(c);
   });
 }
 function updateChips(){
   const seats=UiEng.seats();
-  const sig=UiEng.turnIdx()+'|'+seats.map(s=>
+  const sig=UiEng.turnIdx()+'|'+(uiAiThinking()?'t':'-')+'|'+seats.map(s=>
     (s.name||'')+':'+(s.score|0)+':'+(s.supply!=null?s.supply:SHEPHERDS)).join(',');
   if(sig===chipSig) return;
   chipSig=sig;
@@ -671,18 +832,113 @@ function bannerText(){
 }
 function hintFor(){
   if(uiScreen()!=='game') return '';
-  if(!UiEng.humanTurn()) return 'hold <b>F</b> to skip the animation';
+  if(!UiEng.humanTurn())
+    return 'the pasture is thinking &middot; hold <b>F</b> or tap the board to hurry it along';
   if(postingNow())
     return '<b>1–9</b> post a shepherd on that segment &middot; <b>0</b> or <b>SPACE</b> to skip '
          + '&middot; a grey disc is a feature somebody already herds';
+  if(twoTap())
+    return 'drag to pan &middot; pinch to zoom &middot; tap the tile to rotate &middot; '
+         + 'tap a cell, then tap again to lay it';
   return 'drag to pan &middot; wheel to zoom &middot; <b>R</b> or right-click rotates &middot; '
        + 'click lays the tile &middot; <b>TAB</b> walks the legal cells &middot; <b>ENTER</b> lays';
 }
+
+/* ---- the first-game hints ----
+   Four things this genre reliably fails to explain, said once each, at the
+   moment they are true rather than in a wall of text at the start. Each is
+   retired the moment its situation passes, so a hint you read and acted on does
+   not come back; "seen" lives in prefs, so it does not come back next game
+   either. NO MORE HINTS retires the lot; the settings toggle brings them back.
+   The wording follows the pointer — "tap … then tap again" is a different
+   instruction from "click", and telling a phone to click is how a tutorial
+   loses somebody on the first move. */
+let hintFlags={};                         // per-game one-shots the flow watches
+let hintCur=null;                         // the teaching hint on screen right now
+const UI_HINT_ROWS=[
+  { id:'done', see:()=>!!hintFlags.completed,
+    text:()=>'<b>THAT FEATURE IS FINISHED.</b> Whoever had the most shepherds on it '
+      +'took the whole score — a tie pays everybody tied — and every shepherd '
+      +'standing on it has just walked home to its supply, ready to post again.' },
+  { id:'brook', see:()=>UiEng.mode()==='brook' && placingNow(),
+    text:()=>'<b>THE BROOK OPENS THE GAME.</b> Before the satchel, the water runs out '
+      +'from the spring and the lakes cap its ends. The brook itself never scores, '
+      +'but it divides the meadows exactly as a lane does — so where it goes decides '
+      +'how big your grass ends up being. You may post a shepherd during it.' },
+  { id:'post', see:()=>postingNow(),
+    text:()=>(twoTap()
+        ? 'tap a numbered disc — then tap it again to confirm — or press <b>SKIP</b>. '
+        : '<b>POST A SHEPHERD?</b> Click a numbered disc, press <b>1–9</b>, or <b>SKIP</b>. ')
+      +'You have seven in all, and one only comes back when the feature it stands on '
+      +'is finished. A grey disc is a feature somebody already herds.' },
+  { id:'place', see:()=>UiEng.mode()==='play' && placingNow(),
+    text:()=>(twoTap()
+        ? '<b>YOUR TURN.</b> Tap a glowing cell to try the tile there, then tap again to lay it. '
+        : '<b>YOUR TURN.</b> Click a glowing cell to lay the tile. ')
+      +'Only the cells where it fits are lit; <b>R</b> or the tray tile turns it. '
+      +'Every side that touches must match.' },
+];
+function hintsOn(){ return !uiPref('hintsOff',false); }
+function hintSeenMap(){ const s=uiPref('hintsSeen',null); return (s && typeof s==='object')?s:{}; }
+function hintSeen(id){ return !!hintSeenMap()[id]; }
+function hintMarkSeen(id){
+  if(!id || hintSeen(id)) return;
+  const s=Object.assign({},hintSeenMap());
+  s[id]=true;
+  uiPrefSet('hintsSeen',s);
+}
+function hintReset(){ hintFlags={}; hintCur=null; }
+/* bringing the hints back has to forget what was seen too, or the toggle turns
+   on a flow with nothing left in it */
+function hintsEnable(on){
+  uiPrefSet('hintsOff', !on);
+  if(on) uiPrefSet('hintsSeen',{});
+  hintReset();
+  updateHint();
+  applyToggleLabels();
+}
+function hintRow(){
+  if(!hintsOn() || uiScreen()!=='game') return null;
+  for(const r of UI_HINT_ROWS){
+    if(hintSeen(r.id)) continue;
+    let on=false;
+    try{ on=!!r.see(); }catch(e){}
+    if(on) return r;
+  }
+  return null;
+}
+/* dismiss: the ✕ retires whichever hint is up. On the standing control strip it
+   keeps its old meaning — quiet for this session only. */
+function hintDismiss(){
+  if(hintCur){
+    hintMarkSeen(hintCur);
+    if(hintCur==='done') hintFlags.completed=false;
+    hintCur=null;
+    updateHint();
+    return true;
+  }
+  hintOff=true;
+  updateHint();
+  return false;
+}
 function updateHint(){
-  const ht=el('hintText'), hb=el('hintbar');
-  const hint=hintOff?'':hintFor();
+  const ht=el('hintText'), hb=el('hintbar'), hs=el('hintSkip');
+  const row=hintRow();
+  const was=hintCur;
+  /* a hint whose moment has passed is retired without being clicked: reading it
+     and doing the thing it asked for is the most complete dismissal there is */
+  if(hintCur && (!row || row.id!==hintCur)){ hintMarkSeen(hintCur); hintCur=null; }
+  if(row) hintCur=row.id;
+  const teach=!!row;
+  const hint = teach ? row.text() : (hintOff?'':hintFor());
   if(ht) ht.innerHTML=hint;
-  if(hb && hb.classList) hb.classList.toggle('off', !hint);
+  if(hb && hb.classList){
+    hb.classList.toggle('off', !hint);
+    hb.classList.toggle('teach', teach);
+  }
+  if(hs) hs.hidden=!teach;
+  if(teach && hintCur!==was) uiSpeakHint(hint);
+  else if(!teach) uiSpeakHint('');
 }
 function updateTray(){
   const id=UiEng.drawn();
@@ -694,7 +950,8 @@ function updateTray(){
   const laid=(posting && G.post) ? G.post.tileId : null;
   const shown=id||laid;
   const sig=[shown, uiRot, posting?'p':'-', UiEng.humanTurn(), uiLegal.list.length,
-             uiScreen()].join('|');
+             uiScreen(), uiArmed?(uiArmed.kind+':'+uiArmed.key):'-',
+             posting ? postOpts().map(o=>o.n+(o.ok?'+':'-')).join('') : ''].join('|');
   if(sig===traySig) return;
   traySig=sig;
   const info=el('trayInfo');
@@ -703,7 +960,13 @@ function updateTray(){
     const name=mkEl('div','tname'), sub=mkEl('div','tsub');
     if(shown){
       name.textContent=UiEng.tileName(shown);
-      sub.innerHTML = posting
+      const armedCell=!!(uiArmed && uiArmed.kind==='cell' && G.ghost);
+      const armedPost=!!(uiArmed && uiArmed.kind==='post');
+      sub.innerHTML = armedPost
+        ? 'tap that disc <em>again</em> to post the shepherd, or choose another'
+        : armedCell
+        ? 'it will go here &middot; tap again, or <em>LAY IT</em>, to commit'
+        : posting
         ? 'laid &middot; <em>post a shepherd</em> on a numbered disc, or skip'
         : (uiLegal.list.length + ' place' + (uiLegal.list.length===1?'':'s')
            + ' it will go &middot; rotation <em>' + (uiRot*90) + '&deg;</em>');
@@ -713,11 +976,7 @@ function updateTray(){
     }
     info.appendChild(name); info.appendChild(sub);
   }
-  const bR=el('bRot'), bP=el('bPlace'), bS=el('bSkip');
-  if(bR) bR.disabled=!placingNow();
-  if(bP){ bP.disabled=!(placingNow() && G.ghost && G.ghost.legal);
-          bP.classList.toggle('go', !bP.disabled); }
-  if(bS){ bS.disabled=!postingNow(); bS.classList.toggle('go', postingNow()); }
+  buildTrayBtns();
   setCursor();
 }
 function updateChrome(){
@@ -729,6 +988,15 @@ function updateChrome(){
   updateBar();
   updateTray();
   updateHint();
+  /* G.skipFx — the one boolean render.js needs to answer "collapse this ease".
+     There are THREE ways a player asks for that (F held, the persisted SKIP AI
+     ANIMATION setting, and a tap on the board to hurry the turn along), and
+     render reading only G.fast would honour one of them: the setting would
+     shorten ui.js's waits while render kept playing full-length eases over the
+     top, which is worse than not having the setting. One flag, one meaning. */
+  G.skipFx=uiAiFast();
+  updateLogVisibility();
+  if(uiScreen()!=='game') setHover(null);
   const b=bannerText();
   if(uiScreen()==='game') uiSpeak(b);
 }
@@ -741,32 +1009,151 @@ function updateHud(){ updateChrome(); }
    game.js resolves AI turns inside place() when G.autoAI is on, which finishes
    a four-seat round before the screen has drawn once. G.autoAI is documented as
    ui.js's flag: we take it off and let the turn land on its own beat instead,
-   so the player can see what the pasture just did to them. Holding F collapses
-   the wait — the design's promise is that F skips the animation, never the
-   thinking, so the move itself is unchanged either way. */
-const UI_AI_PACE=600;
-let aiWaitFrom=0;
+   so the player can see what the pasture just did to them.
+
+   Four beats: THINK (the seat chip works), GHOST (the tile it settled on, shown
+   where it is about to land), the commit, then SETTLE (a breath in which the
+   floaters and the completion flash are the only things moving). The whole turn
+   is about a second.
+
+   THE PROMISE, and the line every change here has to stay on the right side of:
+   F, a tap on the board, and the SKIP AI ANIMATION setting collapse the WAIT.
+   They never touch the thinking. Every beat below is a pure delay around calls
+   that happen in the same order with the same arguments either way, so a game
+   played with the animation skipped is bit-identical to one watched in full —
+   test/uiflow.js asserts exactly that, by stateHash, and it is the reason the
+   skip is a wait-length question and never a branch around aiMove.
+
+   Time comes from the frame timestamp, not from the wall clock: rAF hands the
+   browser's own DOMHighResTimeStamp to uiFrame, and a headless suite hands
+   uiFrameOnce whatever timestamps it likes. One clock, no test-only path. */
+const UI_AI_THINK=300, UI_AI_GHOST=400, UI_AI_SETTLE=300, UI_AI_SETTLE_MAX=700;
+let uiAiBeat=null;          // {state:'think'|'ghost'|'settle', t0, seat, move, plan}
+let uiAiSkip=false;         // a tap on the board: fast-forward to the human again
+let uiNowTs=0;              // the timestamp of the frame being served
+
+/* Skipping is three switches OR'd: F held, the persisted setting, and the
+   one-shot a board tap arms. */
+function uiAiFast(){ return !!(G.fast || uiPref('skipAI',false) || uiAiSkip); }
+function uiAiElapsed(ms,t0){ return uiAiFast() || (uiNowTs-t0)>=ms; }
+
+/* The settle is a breath for the feedback the turn just produced, so its length
+   ought to be that feedback's rather than a number I picked: a flat 300ms cut a
+   completed fold's celebration off half way through and started the next seat
+   thinking over the top of it. render.js's rnBusy() is true while any flash,
+   floater, wool puff, shepherd drop-in or tile settle is still on screen.
+   CAPPED REGARDLESS. rnBusy is documented to fall false on its own, and I
+   believe it — but its queues are reaped in RENDER frames, so any page or
+   harness that stops calling render() leaves it stuck true forever, and a
+   pacing loop that trusted it would hang the whole game rather than merely
+   mistime it. The cap is what makes gating on another module's liveness safe. */
+function uiRnBusy(){
+  if(typeof rnBusy!=='function') return false;
+  try{ return !!rnBusy(); }catch(e){ return false; }
+}
+function uiAiSettled(t0){
+  if(uiAiFast()) return true;
+  const dt=uiNowTs-t0;
+  if(dt<UI_AI_SETTLE) return false;          // the breath is owed either way
+  if(dt>=UI_AI_SETTLE_MAX) return true;      // and it is never open-ended
+  return !uiRnBusy();
+}
+
+/* ai.js's plan is only reachable before the tile lands if ai.js offers a pure
+   dry-run — aiMove itself places on its way through, so by the time it returns
+   there is nothing left to preview. Without one the ghost beat has nothing to
+   show and folds away; the cadence keeps its length via the think beat, and the
+   turn is otherwise identical. Never re-derive the choice here: ai.js's noise is
+   module-private, and a second argmax in ui.js would be a second answer. */
+function uiAiPlanFor(seat){
+  /* ai-w2's gate, and it is theirs to insist on: plan() deliberately does NOT
+     draw, because draw() pops the satchel, can retire a dead tile and can close
+     the brook phase — a preview with consequences is not a preview. So it is
+     only meaningful with a tile already in hand, and asking without one is
+     meaningless work on a path that runs every frame. */
+  if(UiEng.step()!=='place' || UiEng.drawn()==null) return null;
+  const A=aiTable();
+  const f=(A && typeof A.plan==='function') ? A.plan
+        : (typeof aiPlan==='function') ? aiPlan : null;
+  if(!f) return null;
+  try{
+    const p=f(seat);
+    return (p && typeof p.x==='number' && typeof p.y==='number') ? p : null;
+  }catch(e){ return null; }
+}
+/* The AI's preview rides on G.ghost, which render.js already draws (G.drawn is
+   the AI's tile from beginTurn). `ai` names the seat, so render may colour it
+   differently — nothing breaks if it does not. */
+function uiAiGhostOn(){ return !!(G.ghost && G.ghost.ai!=null); }
+function uiAiShowGhost(plan,seat){
+  G.ghost={ x:plan.x|0, y:plan.y|0, rot:plan.rot|0, legal:true, ai:seat };
+}
+function uiAiState(){ return (uiAiBeat && uiAiBeat.state) || ''; }
+function uiAiPublish(){ G.aiState=uiAiState(); }
+function uiAiClear(){
+  if(uiAiGhostOn()) G.ghost=null;
+  uiAiBeat=null;
+  uiAiPublish();
+}
+/* the beats only mean anything while a seat is thinking; a settle is the board
+   catching its breath and must not leave a chip spinning */
+function uiAiThinking(){ const s=uiAiState(); return s==='think'||s==='ghost'; }
+
 function pumpAiTurn(){
   const m=UiEng.mode();
+  if(m!=='play' && m!=='brook'){ uiAiClear(); return; }
+
+  /* The settle outlives the turn that earned it: resolveTurn has already passed
+     the crook by the time we get here, so this beat is deliberately keyed to
+     nothing — it simply runs out before the next seat may start thinking. */
+  if(uiAiBeat && uiAiBeat.state==='settle'){
+    if(!uiAiSettled(uiAiBeat.t0)){ uiAiPublish(); return; }
+    uiAiBeat=null;
+  }
+
   const s=UiEng.current();
-  if((m!=='play' && m!=='brook') || UiEng.step()!=='place' || !s || s.human){ aiWaitFrom=0; return; }
+  if(!s || s.human || UiEng.step()!=='place'){
+    if(s && s.human) uiAiSkip=false;       // the fast-forward ends where it was aimed
+    uiAiClear();
+    return;
+  }
   if(typeof aiMove!=='function'){          // no ai.js: let the engine drive itself
     G.autoAI=true;
     if(typeof pumpAI==='function') pumpAI();
     return;
   }
-  const now=nowMs();
-  if(!aiWaitFrom){ aiWaitFrom=now; return; }
-  if(now-aiWaitFrom < (G.fast?0:UI_AI_PACE)) return;
-  aiWaitFrom=0;
+
+  const seat=UiEng.turnIdx(), move=G.moveNo|0;
+  if(!uiAiBeat || uiAiBeat.seat!==seat || uiAiBeat.move!==move)
+    uiAiBeat={ state:'think', t0:uiNowTs, seat, move, plan:null };
+  const b=uiAiBeat;
+
+  if(b.state==='think'){
+    if(!uiAiElapsed(UI_AI_THINK, b.t0)){ uiAiPublish(); return; }
+    b.plan=uiAiPlanFor(seat);
+    b.t0=uiNowTs;
+    if(b.plan){ uiAiShowGhost(b.plan, seat); b.state='ghost'; }
+    else b.state='commit';
+  }
+  if(b.state==='ghost'){
+    if(!uiAiElapsed(UI_AI_GHOST, b.t0)){ uiAiPublish(); return; }
+    b.state='commit';
+  }
+
+  if(uiAiGhostOn()) G.ghost=null;          // the real tile is about to take its place
   const before=G.moveNo|0;
-  aiMove(UiEng.turnIdx());
+  aiMove(seat);
   /* An AI that declines to move would leave the game sitting here for good;
      hand the turn back to the engine's own pump rather than stall the game. */
   if((G.moveNo|0)===before){
+    uiAiBeat=null;
+    uiAiPublish();
     G.autoAI=true;
     if(typeof pumpAI==='function') pumpAI();
+    return;
   }
+  uiAiBeat={ state:'settle', t0:uiNowTs, seat:-1, move:-1, plan:null };
+  uiAiPublish();
 }
 
 /* ---------------- 7. SCREENS ----------------
@@ -1014,6 +1401,24 @@ function buildMenu(){
   btns.appendChild(h);
   root.appendChild(btns);
 }
+/* Nine cells of DOM, no canvas: the help page has to work before art.js has
+   painted anything and inside test/shim.js's noop-canvas, and a picture of the
+   meadow rule is worth more than another paragraph about it. */
+function meadowDiagram(){
+  const cell=(cls,txt)=>'<span class="'+cls+'">'+(txt||'')+'</span>';
+  return '<div class="mdiag">'
+    + '<div class="mgrid" role="img" aria-label="A meadow with two finished folds '
+    + 'on it and one shepherd sitting on the grass. Two finished folds pay three '
+    + 'each, so the meadow is worth six points.">'
+    +   cell('mc m') + cell('mc f','FOLD') + cell('mc m')
+    +   cell('mc m') + cell('mc m sh','▲')  + cell('mc m')
+    +   cell('mc f','FOLD') + cell('mc m') + cell('mc m')
+    + '</div>'
+    + '<div class="mcap">One meadow (the grass), two <b>finished</b> folds touching it, '
+    + 'one shepherd sitting on it. That meadow pays <b>3 × 2 = 6</b> — the amount of '
+    + 'grass never enters into it. An unfinished fold pays the meadow nothing.</div>'
+    + '</div>';
+}
 function buildHelp(root){
   const d=mkEl('div','help');
   d.innerHTML=
@@ -1027,9 +1432,20 @@ function buildHelp(root){
     +'cells around it are filled. Whoever has the most shepherds on the finished '
     +'feature takes the whole score; if it is a tie, everybody tied takes the whole '
     +'score. Then every shepherd on it walks home to its supply.</p>'
-    +'<p><b>MEADOWS.</b> Meadows never finish. At the end of the game each meadow pays '
-    +'<b>3 for every finished fold it touches</b>, to whoever has the most herders '
-    +'sitting on it. A shepherd posted on grass sits down and stays there for good.</p>'
+    /* The one rule everybody gets wrong, and the one worth spending the space
+       on: a meadow is not paid for its own size. Said three ways — the rule,
+       the picture, and the mistake — because "3 per adjacent completed fold"
+       reads as "3 per tile" to almost everyone the first time. */
+    +'<p><b>MEADOWS — READ THIS ONE TWICE.</b> Meadows never finish, and they are '
+    +'never paid for being big. At the end of the game a meadow pays '
+    +'<b>3 points for each finished fold that touches it</b> — and nothing at all '
+    +'for the grass itself. A vast meadow touching no finished fold is worth zero; '
+    +'a single tile of grass wedged against three finished folds is worth 9. '
+    +'Whoever has the most herders sitting on that meadow takes the lot, ties '
+    +'included. A shepherd posted on grass sits down and stays there for the rest '
+    +'of the game — it never comes home, so it is the most expensive post you can '
+    +'make and usually the one that wins.</p>'
+    +meadowDiagram()
     +'<p><b>THE BROOK.</b> With the brook module on, the game opens by laying the brook '
     +'out from the spring; the parting splits it in two and the lakes cap the ends. '
     +'Shepherds may be posted during the brook, and the water divides meadows exactly '
@@ -1040,7 +1456,12 @@ function buildHelp(root){
     +'<b>R</b> or right-click rotates &middot; click lays the tile &middot; '
     +'<b>TAB</b> walks the cells it will fit &middot; <b>ENTER</b> lays &middot; '
     +'<b>1–9</b> posts a shepherd &middot; <b>0</b> or <b>SPACE</b> skips &middot; '
-    +'<b>ESC</b> menu &middot; <b>M</b> mute &middot; <b>F</b> skips the AI\'s animation.</p>';
+    +'<b>ESC</b> backs out &middot; <b>M</b> mute &middot; <b>F</b> hurries the AI along.</p>'
+    +'<p><b>ON A TOUCH SCREEN.</b> Drag to pan, pinch to zoom, tap the tile in the '
+    +'tray to turn it. Laying a tile and posting a shepherd both take <em>two taps</em> '
+    +'— the first shows you what will happen, the second commits it — because '
+    +'neither can be taken back. Tap anywhere while the pasture is thinking to '
+    +'hurry it to your turn.</p>';
   root.appendChild(d);
   const back=mkEl('button','bigbtn ghost','‹ BACK'); back.type='button';
   onAct(back,()=>{ snd('ui'); menuView='root'; buildMenu(); });
@@ -1081,10 +1502,11 @@ function startFromMenu(){
 function newGame(cfg){
   uiLog.length=0; drawLog();
   uiLastPlace=null; G.post=null; G.tabCell=null; uiTabIdx=-1; uiRot=0;
-  uiCat={};
+  uiCat={}; uiBest=null; uiFinalIn=false; uiArmed=null;
   uiView().cx=0; uiView().cy=0;
   UiEng.start(cfg);
-  aiWaitFrom=0;
+  uiAiClear(); uiAiSkip=false;
+  hintReset();
   applyCalm();
   uiLastScreen=null;
   refreshLegal(true);
@@ -1115,19 +1537,38 @@ function resumeFromMenu(){
    Ranked seats, and a stacked bar per seat showing where the points came from.
    Category totals are collected as features complete; whatever finalScore()
    reports at the end is folded in on top. */
-let uiCat={};
+let uiCat={}, uiBest=null, uiFinalIn=false;
 function addCat(seat,kind,pts){
   if(seat==null || !pts) return;
   const k=(uiCat[seat] = uiCat[seat] || {lane:0,fold:0,shrine:0,meadow:0});
   if(k[kind]!=null) k[kind]+=pts;
 }
+/* the single biggest thing that happened all game, whoever it happened to */
+function noteBest(seat,kind,pts,why){
+  pts=pts|0;
+  if(seat==null || pts<=0) return;
+  if(uiBest && uiBest.pts>=pts) return;
+  uiBest={seat, kind, pts, why:why||''};
+}
 const UI_CATS=[['lane','LANES',PAL.lane],['fold','FOLDS',PAL.fold],
                ['shrine','SHRINES',PAL.shrine],['meadow','MEADOWS',PAL.meadow]];
 function collectFinal(){
+  /* ONCE. buildEnd runs whenever the end screen is built — syncScreens on
+     arrival, and again for anything that asks the ui for the summary — while
+     finalScore() re-walks the whole board and answers in full every time. Fold
+     that into a running total twice and every meadow is counted twice: the bars
+     go wrong, and they go wrong in a way that still adds up to a plausible
+     picture, which is why nothing noticed. */
+  if(uiFinalIn) return;
+  uiFinalIn=true;
   for(const row of UiEng.final()){
     const kind=row.kind||row.type;
     const pts=row.pts|0;
-    for(const h of (row.holders||[])) addCat(typeof h==='number'?h:h.seat, kind, pts);
+    for(const h of (row.holders||[])){
+      const seat=(typeof h==='number')?h:h.seat;
+      addCat(seat, kind, pts);
+      noteBest(seat, kind, pts, 'a '+kind+' at the final count');
+    }
   }
 }
 function buildEnd(){
@@ -1139,9 +1580,16 @@ function buildEnd(){
   const ti=el('eTitle');
   if(ti){
     const shared=rank.filter(r=>(r.s.score|0)===top);
+    /* game.js names an unnamed human seat "You", which this third-person
+       template turned into "YOU TAKES THE PASTURE" — the same disagreement
+       beginTurn already had to fix on its own banner. Second person for the
+       pronoun, the name for everybody who has one. */
+    const champ=rank.length ? rank[0].s : null;
+    const pronoun=!!(champ && champ.human && String(champ.name||'').trim().toUpperCase()==='YOU');
     ti.textContent = !rank.length ? 'NO PASTURE'
       : shared.length>1 ? 'A SHARED PASTURE'
-      : String(rank[0].s.name||'').toUpperCase()+' TAKES THE PASTURE';
+      : pronoun ? 'YOU TAKE THE PASTURE'
+      : String(champ.name||'').toUpperCase()+' TAKES THE PASTURE';
     if(ti.classList){ ti.classList.toggle('win',champHuman); ti.classList.toggle('fail',!champHuman); }
   }
   uiText('eStats','SEED '+((G.config&&G.config.seed)>>>0)+'  ·  '+seats.length+' SEATS'
@@ -1149,7 +1597,7 @@ function buildEnd(){
   const tb=el('eTable');
   if(tb){
     let html='<div class="erow ehead"><span class="rk">#</span><span class="who">SEAT</span>'
-      +'<span>WHERE THE POINTS CAME FROM</span><span class="tot">TOTAL</span></div>';
+      +'<span class="bhead">WHERE THE POINTS CAME FROM</span><span class="tot">TOTAL</span></div>';
     rank.forEach((r,n)=>{
       const c=uiCat[r.i]||{lane:0,fold:0,shrine:0,meadow:0};
       const sum=UI_CATS.reduce((a,k)=>a+(c[k[0]]|0),0);
@@ -1160,7 +1608,10 @@ function buildEnd(){
         ? UI_CATS.map(k=>[k[2], (c[k[0]]|0)/Math.max(sum,1)])
         : [[PAL.uiDim, total>0?1:0]];
       const w=Math.max(total,1)/Math.max(top,1);
-      html+='<div class="erow'+(n===0?' win':'')+'"><span class="rk">'+(n+1)+'</span>'
+      const detail=UI_CATS.filter(k=>(c[k[0]]|0)>0)
+        .map(k=>(c[k[0]]|0)+' from '+k[1].toLowerCase()).join(', ');
+      html+='<div class="erow'+(n===0?' win':'')+'" title="'+(detail||'no points')+'">'
+        +'<span class="rk">'+(n+1)+'</span>'
         +'<span class="who"><span class="sw" style="background:'+UiEng.seatColor(r.i)+'"></span>'
         +'<span class="nm">'+String(r.s.name||('SEAT '+(r.i+1))).toUpperCase()
         +(r.s.human?'':' <span style="opacity:.6">(AI)</span>')+'</span></span>'
@@ -1170,6 +1621,26 @@ function buildEnd(){
         +'<span class="tot">'+total+'</span></div>';
     });
     tb.innerHTML=html;
+  }
+  /* the one thing worth retelling: not who won, but the biggest single score
+     anybody took all game. It is the moment a player actually remembers, and
+     the ranked table is the last place they would find it. */
+  const best=el('eBest');
+  if(best){
+    if(uiBest){
+      const col=UiEng.seatColor(uiBest.seat);
+      best.innerHTML='<span class="blbl">BEST MOMENT</span>'
+        +'<span class="bwho"><span class="sw" style="background:'+col+'"></span>'
+        +String(UiEng.seatName(uiBest.seat)||'').toUpperCase()+'</span>'
+        +'<span class="bval">+'+(uiBest.pts|0)+'</span>'
+        +'<span class="bwhy">'+(uiBest.why||('a '+uiBest.kind))+'</span>';
+      /* no aria-label here: on a bare div it is ignored by some screen readers
+         and REPLACES the content in others, and the visible words already read
+         correctly — "BEST MOMENT, YOU, plus 16, a finished fold" */
+      best.hidden=false;
+    }else{
+      best.innerHTML=''; best.hidden=true;
+    }
   }
   const hint=el('eHint');
   if(hint) hint.innerHTML='<span class="bkey">'
@@ -1206,6 +1677,28 @@ function applyCalm(){
   }
 }
 function toggleCalm(){ uiPrefSet('calm', !G.calm); applyCalm(); }
+/* SKIP AI ANIMATION is the same switch F holds down, latched. It shortens the
+   waits around the AI's turn and touches nothing else — same seat, same
+   enumeration, same move — which is what makes it a comfort setting rather
+   than a difficulty one. */
+function setSkipAI(on){ uiPrefSet('skipAI', !!on); applyToggleLabels(); }
+function toggleSkipAI(){ setSkipAI(!uiPref('skipAI',false)); }
+function applyToggleLabels(){
+  const sk=el('bSkipAI');
+  if(sk){
+    const on=!!uiPref('skipAI',false);
+    sk.textContent = on?'SKIP AI ANIMATION ON':'SKIP AI ANIMATION OFF';
+    if(sk.classList) sk.classList.toggle('on',on);
+    attr(sk,'aria-pressed', on?'true':'false');
+  }
+  const hb=el('bHints');
+  if(hb){
+    const on=hintsOn();
+    hb.textContent = on?'HINTS ON':'HINTS OFF';
+    if(hb.classList) hb.classList.toggle('on',on);
+    attr(hb,'aria-pressed', on?'true':'false');
+  }
+}
 function applyMixes(){
   const s=clamp(+uiPref('sfx',100)||0,0,100), m=clamp(+uiPref('mus',100)||0,0,100);
   if(typeof Snd!=='undefined' && Snd){
@@ -1260,7 +1753,8 @@ function uiResetProgress(){
       localStorage.removeItem(UI_PREFS);
     }
   }catch(e){}
-  applyMixes(); applyCalm();
+  applyMixes(); applyCalm(); applyToggleLabels();
+  hintReset(); updateHint();               // a cleared prefs file has seen nothing
   if(b){
     b.textContent='PROGRESS CLEARED';
     if(b.classList) b.classList.remove('armed');
@@ -1327,12 +1821,19 @@ function typingIn(e){
   const t=e&&e.target;
   return !!(t && t.tagName && /^(INPUT|TEXTAREA)$/.test(t.tagName));
 }
+/* ESC peels one layer at a time, outermost first, and only reaches the menu
+   when there is nothing left on top of the board. A teaching hint and an armed
+   tap both count as layers: the hint because it is the newest thing asking for
+   attention, the armed tap because backing out of a placement you have proposed
+   but not committed is exactly what ESC is for. */
 function escPressed(){
   if(setOpen){ toggleSettings(false); return; }
   const s=uiScreen();
   if(s==='menu'){ if(menuView!=='root'){ menuView='root'; buildMenu(); } return; }
   if(s==='end'){ toMenu(); return; }
+  if(hintCur){ hintDismiss(); return; }
   if(UiEng.mode()==='reveal'){ UiEng.revealSkip(); return; }
+  if(uiArmed){ disarm(); clearGhost(); return; }
   if(G.ghost){ clearGhost(); G.tabCell=null; uiTabIdx=-1; return; }
   toMenu();
 }
@@ -1415,6 +1916,9 @@ function uiKeyUp(e){
   if(e.key==='Shift') shiftHeld=false;
   if(e.key==='f'||e.key==='F') G.fast=false;
 }
+/* every held key is released the moment the window stops being the thing that
+   would hear the keyup */
+function uiBlur(){ G.fast=false; shiftHeld=false; }
 
 /* ---------------- 10. THE PANEL & TRAY BUTTONS ---------------- */
 function mkBtn(parent,id,txt,fn,cls,title,key){
@@ -1428,15 +1932,56 @@ function mkBtn(parent,id,txt,fn,cls,title,key){
   if(parent && parent.appendChild) parent.appendChild(b);
   return b;
 }
+/* The tray's buttons ARE the post window on a phone. A numbered disc drawn on
+   the canvas is about 21 canvas pixels across, and a 960-wide canvas shown on a
+   400-wide screen makes that eight CSS pixels — no enlargement of the hit test
+   can turn that into a 44px target without swallowing the tile whole. So the
+   choice is offered twice: precisely, as the discs, and plainly, as one full
+   button per segment. The buttons are also what a screen reader and a keyboard
+   get, which is why they are built on every width and not just the narrow one.
+   A segment somebody already herds stays present and greyed rather than being
+   removed — pressing it says who has it, and a choice that silently vanishes is
+   worse than one that explains itself. */
 function buildTrayBtns(){
   const row=el('trayBtns');
   if(!row) return;
   row.innerHTML='';
-  attr(row,'role','group'); attr(row,'aria-label','What you may do with the tile in hand');
-  mkBtn(row,'bRot','↻ ROTATE',()=>uiRotate(1),'','Turn the tile to the next rotation that fits somewhere','R');
-  mkBtn(row,'bPlace','LAY IT',()=>{ if(G.ghost) tryPlaceAt(G.ghost.x,G.ghost.y); },'',
+  attr(row,'role','group');
+  if(postingNow()){
+    attr(row,'aria-label','Where this shepherd may go');
+    for(const o of postOpts()){
+      const kind=String(UI_KIND[o.kind]||'feature').toUpperCase();
+      const here=armedFor('post',o.n);
+      const b=mkBtn(row,'bPost'+o.n, (here?'CONFIRM ':'')+o.n+' '+kind,
+        ()=>{
+          if(o.ok && twoTap() && !armedFor('post',o.n)){
+            arm('post',o.n,o.n);
+            uiSpeak('post on the '+(UI_KIND[o.kind]||'feature')+'? press again to confirm');
+            return;
+          }
+          disarm(); postDisc(o.n);
+        },
+        (here?'go':'')+(o.ok?'':' off'),
+        o.ok ? ('Post a shepherd on the '+(UI_KIND[o.kind]||'feature'))
+             : (o.by ? ('Already herded by '+o.by) : 'This feature cannot take a shepherd'),
+        String(o.n));
+      /* greyed, not disabled: a disabled button drops out of the tab order and
+         then nobody can ask it why it is grey */
+      if(!o.ok) attr(b,'aria-disabled','true');
+    }
+    mkBtn(row,'bSkip','SKIP',()=>{ disarm(); postSkip(); },'','Post no shepherd this turn','0');
+    return;
+  }
+  attr(row,'aria-label','What you may do with the tile in hand');
+  const bR=mkBtn(row,'bRot','↻ ROTATE',()=>uiRotate(1),'',
+        'Turn the tile to the next rotation that fits somewhere','R');
+  bR.disabled=!placingNow();
+  const armedCell=!!(uiArmed && uiArmed.kind==='cell');
+  const ready=!!(placingNow() && G.ghost && G.ghost.legal);
+  const bP=mkBtn(row,'bPlace',armedCell?'LAY IT HERE':'LAY IT',
+        ()=>{ disarm(); if(G.ghost) tryPlaceAt(G.ghost.x,G.ghost.y); },ready?'go':'',
         'Lay the tile on the highlighted cell','ENTER');
-  mkBtn(row,'bSkip','SKIP',()=>postSkip(),'','Post no shepherd this turn','0');
+  bP.disabled=!ready;
 }
 function buildPanel(){
   const panel=el('panel');
@@ -1462,16 +2007,21 @@ if(uiCv && uiCv.addEventListener){
   uiCv.addEventListener('pointerdown',e=>{
     if(e.button && e.button!==0) return;
     if(e.preventDefault) e.preventDefault();
+    notePointer(e);
     if(uiCv.setPointerCapture && e.pointerId!=null){ try{ uiCv.setPointerCapture(e.pointerId); }catch(err){} }
     const p=canvasPos(e); uiDown(p[0],p[1],e.pointerId);
   });
-  uiCv.addEventListener('pointermove',e=>{ const p=canvasPos(e); uiMove(p[0],p[1],e.pointerId); });
+  uiCv.addEventListener('pointermove',e=>{ notePointer(e); const p=canvasPos(e); uiMove(p[0],p[1],e.pointerId); });
   uiCv.addEventListener('pointerup',e=>{ const p=canvasPos(e); uiUp(p[0],p[1],e.pointerId); });
   uiCv.addEventListener('pointercancel',()=>uiCancel());
   uiCv.addEventListener('pointerleave',e=>{
     uiPtrs.delete(e.pointerId==null?1:e.pointerId);
     if(uiPtrs.size<2) uiPinch=null;
-    if(!uiDragging) clearGhost();
+    /* a finger lifting off a touch screen fires this straight after the tap
+       that armed the placement — clearing the ghost here would erase the very
+       proposal the second tap is meant to confirm */
+    setHover(null);
+    if(!uiDragging && !uiArmed) clearGhost();
   });
   uiCv.addEventListener('wheel',e=>{
     if(e.preventDefault) e.preventDefault();
@@ -1496,8 +2046,11 @@ buildTrayBtns();
   b('eMenu',toMenu);
   b('setClose',()=>toggleSettings(false));
   b('bCalm',toggleCalm);
+  b('bSkipAI',toggleSkipAI);
+  b('bHints',()=>hintsEnable(!hintsOn()));
   b('bReset',uiResetProgress);
-  b('hintClose',()=>{ hintOff=true; updateHint(); });
+  b('hintClose',()=>hintDismiss());
+  b('hintSkip',()=>hintsEnable(false));
   b('logToggle',()=>toggleLog());
   const bind=(id,key,readout,setter)=>{
     const sl=el(id);
@@ -1517,9 +2070,11 @@ buildTrayBtns();
 if(typeof Hooks!=='undefined' && Hooks && Array.isArray(Hooks.onComplete)){
   Hooks.onComplete.push((root, rows)=>{
     const kind=(root && root.type) || 'feature';
+    hintFlags.completed=true;              // the first one teaches the rule
     for(const a of (rows||[])){
       if(!a || a.seat==null) continue;
       addCat(a.seat, kind, a.pts|0);
+      noteBest(a.seat, kind, a.pts|0, 'a finished '+kind);
       logLine(String(kind).toUpperCase()+' → <b>'+UiEng.seatName(a.seat)+'</b> <i>+'+(a.pts|0)+'</i>');
     }
     // no sfx here: scoreCompletions() sounds the completion immediately before
@@ -1536,6 +2091,7 @@ if(typeof document!=='undefined' && document.addEventListener)
 
 applyMixes();
 applyCalm();
+applyToggleLabels();
 {
   const rm=mq('(prefers-reduced-motion: reduce)');
   if(rm && rm.addEventListener) rm.addEventListener('change',applyCalm);
@@ -1548,6 +2104,15 @@ fitCanvas();
 if(typeof addEventListener==='function'){
   addEventListener('resize',fitCanvas);
   addEventListener('orientationchange',fitCanvas);
+  /* A key held down has no keyup if the window loses focus while it is down:
+     alt-tab with F pressed, release it over something else, and G.fast stays
+     true for the rest of the session. That was always wrong — SHIFT latches
+     the same way and leaves the arrows panning at four times speed — but it
+     costs far more now that G.fast feeds G.skipFx, because a stuck key
+     silently disables the AI pacing AND every ease, camera walk and zoom
+     tween in render.js, with nothing on screen to say why. Dropping the held
+     modifiers on blur is the whole fix. */
+  addEventListener('blur', uiBlur);
   if(document.addEventListener){
     document.addEventListener('fullscreenchange',fitCanvas);
     document.addEventListener('webkitfullscreenchange',fitCanvas);
@@ -1569,6 +2134,10 @@ let uiFrames=0;
    has no rAF to drive the turns. Claiming it on the first real frame means a
    page without an animation loop keeps the engine's own synchronous pump. */
 function uiFrameOnce(ts){
+  /* the beat clock. rAF passes the browser's timestamp and a suite passes its
+     own; both are the same kind of thing, so the pacing has one clock and no
+     test-only path. A missing or non-finite stamp falls back to the wall. */
+  uiNowTs=(typeof ts==='number' && isFinite(ts)) ? ts : nowMs();
   if(uiFrames++===0) G.autoAI=false;
   if(uiOwnsLoop){
     if(typeof frame==='function') frame(ts);
@@ -1642,8 +2211,24 @@ if(typeof requestAnimationFrame==='function') requestAnimationFrame(uiFrame);
     skip:()=>postSkip(),
     posting:()=>postingNow(),
     placing:()=>placingNow(),
-    /* the paced AI turn, as the frame loop runs it; fast:true is the F key */
-    aiStep:fast=>{ const w=G.fast; if(fast) G.fast=true; aiWaitFrom=1; pumpAiTurn(); G.fast=w; return G.moveNo|0; },
+    /* the paced AI turn, as the frame loop runs it; fast:true is the F key.
+       With the wait collapsed one pump carries a whole turn; without it, one
+       pump advances one beat and the caller supplies the frames. */
+    aiStep:fast=>{ const w=G.fast; if(fast) G.fast=true; pumpAiTurn(); G.fast=w; return G.moveNo|0; },
+    aiBeat:()=>uiAiState(),
+    aiPace:()=>({think:UI_AI_THINK, ghost:UI_AI_GHOST,
+                 settle:UI_AI_SETTLE, settleMax:UI_AI_SETTLE_MAX}),
+    rnBusy:()=>uiRnBusy(),
+    aiGhost:()=>(uiAiGhostOn()?G.ghost:null),
+    aiTap:()=>{ uiAiSkip=true; return uiAiSkip; },
+    skipFx:()=>!!G.skipFx,
+    hoverCell:()=>G.hover,
+    movePx:(sx,sy)=>{ uiMove(sx,sy,1); return G.hover; },
+    /* the three phases of a drag, separately, so a suite can look at the board
+       WHILE the finger is still down — dragPx only ever shows the aftermath */
+    downPx:(sx,sy)=>{ uiDown(sx,sy,1); return true; },
+    upPx:(sx,sy)=>uiUp(sx,sy,1),
+    skipAI:on=>{ if(on!==undefined) setSkipAI(!!on); return !!uiPref('skipAI',false); },
     /* one frame of the real loop, without scheduling the next */
     frame:ts=>{ uiFrameOnce(ts==null?nowMs():ts); return G.tick|0; },
     frames:()=>uiFrames,
@@ -1663,15 +2248,28 @@ if(typeof requestAnimationFrame==='function') requestAnimationFrame(uiFrame);
       return true;
     },
     keyUp:k=>uiKeyUp({key:k}),
+    blur:()=>{ uiBlur(); return !!G.fast; },
     banner:()=>bannerText(),
     chips:()=>UiEng.seats().map((s,i)=>({name:s.name, score:s.score|0,
       supply:(s.supply!=null?s.supply:SHEPHERDS), turn:i===UiEng.turnIdx()})),
     log:()=>uiLog.slice(),
     logOpen:on=>{ toggleLog(on); return logOpen; },
+    logHidden:()=>logHidden,
     speak:()=>spoken,
     settings:on=>{ toggleSettings(on); return setOpen; },
     settingsOpen:()=>setOpen,
     calm:()=>{ toggleCalm(); return !!G.calm; },
+
+    /* touch: which pointer the ui believes it is on, and the two-tap state */
+    coarse:on=>{ uiCoarseForced=(on==null?null:!!on); updateTray(); updateHint(); return twoTap(); },
+    armed:()=>(uiArmed?Object.assign({},uiArmed):null),
+    hintText:()=>{ const e=el('hintText'); return e?String(e.innerHTML||''):''; },
+    speakHint:()=>spokenHint,
+    hintId:()=>hintCur,
+    hintDismiss:()=>hintDismiss(),
+    hintsOff:()=>{ hintsEnable(false); return !hintsOn(); },
+    hintsOn:on=>{ hintsEnable(on===undefined?true:!!on); return hintsOn(); },
+    best:()=>(uiBest?Object.assign({},uiBest):null),
     mixes:(sfx,mus)=>{
       if(sfx!=null) uiPrefSet('sfx',clamp(sfx|0,0,100));
       if(mus!=null) uiPrefSet('mus',clamp(mus|0,0,100));

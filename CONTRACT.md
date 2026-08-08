@@ -109,7 +109,9 @@ way a tile turns (View.spot and render both call it). artFelt(), artEmblem(name)
 artClearCache().
 As-built (Wave 1-D): geometry is DERIVED, never authored — fold shape from
 owned sides, gates wherever a lane path crosses a fold mask, ponds wherever a
-brook touches exactly ONE side. Pack-tile author rules (each fixed a real bug):
+brook touches exactly ONE side. Pack-tile author rules (each fixed a real bug — plus Wave 2's: an
+orientation-sensitive sprite must be pushed as a PROP, never painted into the
+canonical buffer, or it tumbles with the rotation remap):
 fold segments claim a pixel only if their field beats every other fold's by
 FOLD_SEP (else FOLD2SEP_A's two pens merge into a fictional L); a fold mask is
 reduced to the component connected to its own sides, pockets filled; a lane
@@ -117,6 +119,12 @@ arm drives to a gate only as the tile's ONLY stub (arms meeting arms stop at
 the hamlet plaza; stubs end at shrine doors). Widths (legibility at 64px,
 wider than §5 prose): lane 8px w/ parallel-offset ruts, brook 11px, wall 4px.
 Rotations are a buffer index remap — art and slot rotation cannot drift.
+As-built (Wave 2): artPaintTile returns {buf, props, seed} — orientation-
+sensitive props (shrine buildings, huts, sheep, ram emblems) stamp AFTER the
+rotation remap (they used to tumble with the tile; shrines rendered upside
+down at rot 2). render.js gained a presentation camera (reveal walk / zoom
+tween / ghost ease, all gated on rushed() = G.fast OR G.skipFx union);
+rnGeom/worldToScreen/screenToCell untouched.
 
 ## js/game.js (Wave 1-C)
 G {mode:'menu'|'brook'|'play'|'reveal'|'end', seats:[{name,color,human,
@@ -172,8 +180,25 @@ are the single menu source. INTEGRATOR AMENDMENT (supersedes the Box-Muller-
 on-RNG phrasing above): difficulty noise is STATELESS — hash-derived from
 (G.seed, G.moveNo, seatIdx, candidateIdx), never RNG.next() — so a resumed AI
 game is bit-identical to straight-through play; RNG.state is untouched by AI.
-Wave 2 tuning note: Maud's herder-lock (meadow posts never return → supply
-starvation, 1.8 shepherds by turn 20) — lever is w_scar up or w_meadow down.
+As-built (Wave 2): Maud TUNED — w_meadow 1.6→1.1, w_scar 0.7→1.3 (wins
+5.4%→26.4% pooled over held-out seed sets; still the meadow specialist at
+33.2% meadow share; the mispricing was the PERMANENCE of a herder, not the
+meadow's value — a meadow post is the most lucrative single use of a shepherd
+at 6.61pts). Supply-aware scarcity (supply^α) measured and REJECTED (levels
+everyone down; α=1 is the peak). Bram's real lever is w_pot (not w_block,
+inert 0.9–1.5) — recorded in ai.js for a later wave, deliberately not taken.
+Difficulty sigmas verified, unchanged: Ram>Lamb 90%, Ewe>Lamb 76%, Ram>Ewe 69%.
+AI.plan(seatIdx) → same shape as seat.ai.plan (seg = intended segIdx or
+null); returns null rather than throwing; only meaningful with a tile in hand
+(it deliberately does not draw). It is the pure dry-run selection seam — aiMove calls it, ui.js's
+ghost beat consumes it, NOBODY re-derives a choice (proven selection-identical:
+all 18 goldens byte-identical across the refactor). Purity asterisk: plan()
+triggers board.js's lazy adjFolds re-canonicalization (idempotent, stateHash-
+invisible, same as featureAt) — a future deep structural snapshot WILL see
+that Set rewritten; the caveat lives in aiPlan's header.
+test/ai-match.golden.json is a committed artifact — regenerate ONLY via
+AI_MATCH_UPDATE=1; the config list is fingerprinted into it (config drift
+fails loudly). Assertions are on stateHash; scoreboards print, never assert.
 
 ## js/render.js (Wave 1-D)
 render(): board blits from art cache under view {cx,cy,zoom in ZOOMS}; ghost
@@ -188,11 +213,25 @@ these (the disc hit-tested IS the disc drawn — LOAD-BEARING FOR INPUT, do not
 change rounding without telling ui-e). Exports the feedback queues game.js
 drives: pushFloater(x,y,text,color) [fractional BOARD CELL coords],
 pushFlash(cells,color) [rootMeta.cells verbatim], pushBanner(text,color);
-plus FONT/drawPixelText/textW for ui.js. Reveal spotlight = steps[idx], the
-step ABOUT to be counted. Every read typeof/null-guarded.
-Screenshot gotcha: headless Chrome under --virtual-time-budget does NOT
-service rAF from page scripts — visual drivers chain on setTimeout; freeze
-with render();render=function(){}; and hide #menu/#end.
+plus FONT/drawPixelText/textW for ui.js (FONT includes '·'). Reveal spotlight = steps[idx], the
+step ABOUT to be counted. Every read typeof/null-guarded. render.js EXPORTS
+rnBusy()→bool (true while any flash/floater/wool-puff/drop-in/settle is on
+screen) — ui's AI settle beat gates on it; ANY caller must cap what it will
+wait (see the ui.js block's 700ms cap rationale).
+Screenshot gotcha (CORRECTED Wave 2 — the old wording was backwards): headless
+Chrome under --virtual-time-budget DOES service the page's rAF loop, so a
+setTimeout chain races it — a driver staging a mid-animation state may shoot
+that state plus N frames. Reliable pattern: NULL requestAnimationFrame in the
+driver, let the in-flight frame pass, THEN stage and freeze with
+render();render=function(){}; and hide #menu/#end. Related trap: a far-future
+hand-supplied frame timestamp doesn't pause anything — it makes every timed
+state instantly overdue; step the clock in small increments from
+performance.now(). Narrow-layout shots: headless Chrome FLOORS its viewport at
+500px — --window-size=400 silently yields a CROP of a 500px page (use the
+scratchpad narrow.sh pattern; a 'broken' mobile screenshot may be this).
+An exception inside a setTimeout callback is NOT caught by the try/catch
+around the scheduling call — a visual driver dies silently mid-sequence
+(blank frames, no error). Put the catch INSIDE the callback.
 
 ## js/ui.js (Wave 1-E)
 Owns index.html DOM + css/style.css. Menu (seats 2–5: human seat + 1–4 AI
@@ -205,6 +244,29 @@ skip-AI-animation, ? help), seat chips/satchel/move-log chrome, settings
 popover (calm/sfx/music/reset — port Burned Ground patterns: onAct,
 focusedControl, applyCalm, fitCanvas, fullscreen), end summary screen, boot.
 AUGMENTS WoolDbg with ui hooks needed by tests.
+As-built (Wave 2): AI pacing is a four-beat state machine (think 300 / ghost
+400 / commit / settle 300 FLOOR then held while render's rnBusy() reports
+feedback on screen, HARD-CAPPED at 700 — the cap is a safety property, not
+taste: rnBusy's queues reap in RENDER frames, so a page that stops calling
+render() pins it true forever; gating on another module's liveness without a
+ceiling ships a hung game) driven off the FRAME TIMESTAMP, never the wall
+clock — one clock for browser and suites, no test-only path. F, a board tap,
+or the persisted SKIP AI ANIMATION setting collapse the WAIT only; the move is
+bit-identical either way (uiflow asserts by stateHash across two whole games).
+The ghost beat consumes ai.js's AI.plan (pure dry-run) — ui.js NEVER
+re-derives the choice, and the beat folds away if plan() is absent. G.ghost
+may carry ai:<seatIdx> during an AI ghost beat (ui's own setGhost/clearGhost
+stand down) — test `G.ghost.ai != null`, NEVER truthiness (seat 0 is real).
+ui publishes per frame for render: G.aiState, G.hover, and G.skipFx = the
+UNION of all three animation-collapse paths (F held, SKIP AI ANIMATION
+setting, board tap) — render's rushed() must gate on G.skipFx, not G.fast. Coarse pointers are two-tap for BOTH laying and posting; mouse
+path unchanged (asserted separately). index.html has TWO live regions — #sr
+(turn/board) and #srHint (teaching hints), ONE writer each (they shared #sr
+first and the banner won every frame — the tutorial was announced to nobody).
+prefs keys: skipAI, hintsOff, hintsSeen. buildEnd() is guarded against
+double-folding finalScore() (it's called more than once; the category bars
+must total each seat's score exactly — asserted, and the assertion fails on
+the previously-shipped double-count).
 
 ## test/ (suites by wave)
 shim.js+boot.js (Wave 0, done). Wave 1: tiledata (A), rules+placement+meadows
@@ -216,6 +278,19 @@ it claims to catch before trusting it green (a scan can sit where it can never
 fire); report a COUNT beside every agreement check (a dead code path hides
 behind a green boolean); cheap proxy metrics diverge from the target exactly
 on the cases that matter — verify against something independently derived.
+Three more, from five structurally-unfailable tests found in wave 2: a suite
+or driver may NOT measure the thing under test THROUGH the thing under test
+(a camera measured via its own transform is a tautology); a screenshot driver
+must fail LOUDLY (timer callbacks swallow exceptions — plausible artifacts
+with rows silently missing); and before changing SHIPPED behavior to fix
+something a harness showed you, confirm it occurs under the REAL frame loop
+(a fix for a harness-only problem is invisible forever and looks like
+diligence). And the meta-rule behind three of this wave's four real defects:
+when a result contradicts something you already know, CHASE it — don't file
+it. Each was preceded by a moment where the honest reaction was "that can't
+be right". Summary rule for harness work: on this project the harness has
+been wrong far more often than the code — verify the instrument before
+believing the reading.
 Wave-3 brief notes: (0) BLOCKER — tiles.js needs registerTiles(rows)
 (append + re-index _TILE_BY_ID/_EDGE_CODES/_SLOT_OWNER) AND a matching
 base-versus-registered split in tiledata's roster/count assertions — landing

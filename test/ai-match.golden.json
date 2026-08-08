@@ -1,0 +1,24 @@
+{
+  "v": 1,
+  "configs": "2p/lamb/brookon/seed20260808|2p/ewe/brookon/seed20260909|2p/ram/brookon/seed20261010|2p/mixed/brookon/seed20261111|3p/lamb/brookon/seed20261212|3p/ewe/brookon/seed20261313|3p/ram/brookon/seed20261414|3p/mixed/brookon/seed20261515|4p/lamb/brookon/seed20261616|4p/ewe/brookon/seed20261717|4p/ram/brookon/seed20261818|4p/mixed/brookon/seed20261919|5p/lamb/brookon/seed20262020|5p/ewe/brookon/seed20262121|5p/ram/brookon/seed20262222|5p/mixed/brookon/seed20262323|2p/ram/brookoff/seed770001|5p/ewe/brookoff/seed770002",
+  "hashes": {
+    "2p/lamb/brookon/seed20260808": "3bf5a285",
+    "2p/ewe/brookon/seed20260909": "8a047d84",
+    "2p/ram/brookon/seed20261010": "b49dadeb",
+    "2p/mixed/brookon/seed20261111": "4942c2ae",
+    "3p/lamb/brookon/seed20261212": "1d77be4e",
+    "3p/ewe/brookon/seed20261313": "31ab27ab",
+    "3p/ram/brookon/seed20261414": "b62feb6e",
+    "3p/mixed/brookon/seed20261515": "4affb80b",
+    "4p/lamb/brookon/seed20261616": "abfe873c",
+    "4p/ewe/brookon/seed20261717": "f78b03b7",
+    "4p/ram/brookon/seed20261818": "3d21cd1e",
+    "4p/mixed/brookon/seed20261919": "eab105ca",
+    "5p/lamb/brookon/seed20262020": "ec882e00",
+    "5p/ewe/brookon/seed20262121": "b2b957d9",
+    "5p/ram/brookon/seed20262222": "13536658",
+    "5p/mixed/brookon/seed20262323": "cb7f275a",
+    "2p/ram/brookoff/seed770001": "19050963",
+    "5p/ewe/brookoff/seed770002": "22449086"
+  }
+}
