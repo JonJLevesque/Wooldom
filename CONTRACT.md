@@ -211,6 +211,11 @@ shim.js+boot.js (Wave 0, done). Wave 1: tiledata (A), rules+placement+meadows
 (B), brook+saveload (C), audio-smoke (F), uiflow (E). Wave 2: ai-match (G).
 Wave 3: packs-<name> each. meadows.js MUST use an independent flood-fill
 scorer written from the rules text, importing nothing from board.js.
+Wave-3 kickoff habits (earned this wave): for ANY new check, PLANT the fault
+it claims to catch before trusting it green (a scan can sit where it can never
+fire); report a COUNT beside every agreement check (a dead code path hides
+behind a green boolean); cheap proxy metrics diverge from the target exactly
+on the cases that matter — verify against something independently derived.
 Wave-3 brief notes: (0) BLOCKER — tiles.js needs registerTiles(rows)
 (append + re-index _TILE_BY_ID/_EDGE_CODES/_SLOT_OWNER) AND a matching
 base-versus-registered split in tiledata's roster/count assertions — landing

@@ -27,51 +27,6 @@ function skip(label, why){
   skipped.push(label);
 }
 
-/* ---- 0. page integrity: the window.* publish vector ----
-   test/boot.js owns the DECLARATION scan (two modules declaring one top-level
-   name — const/let/class dies loudly, function/var overwrites silently) and
-   runs it before load, so it is not repeated here.
-
-   It cannot see this third vector. `window.X = ...` has no declaration keyword
-   to match, and the semantics are the same silent overwrite: the last module in
-   load order wins, with no error. Measured, by appending
-   `window.paintTile = function(){ return null; }` to render.js where art.js
-   publishes the real one — boot, tiledata, rules, placement, brook, saveload
-   and ai-smoke ALL stayed green, and this check was the only thing that caught
-   it. Indentation is NOT a proxy for "guarded": art.js and render.js publish
-   theirs indented inside an `if(typeof window!=='undefined')` environment
-   check, which guards nothing about ownership.
-
-   The one intended duplicate has its GUARD asserted at runtime below rather
-   than its NAME allow-listed here — an allow-list keeps passing after the guard
-   that made it safe is deleted, which is the failure it would exist to catch. */
-(function(){
-  const fs=require('fs'), path=require('path');
-  const root=path.join(__dirname,'..');
-  const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
-  const files=[...new Set([...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map(m=>m[1]))];
-  if(!files.length){ skip('no unexpected window.* export is published by two modules','no script tags found'); return; }
-  const pub=new Map();
-  for(const f of files){
-    let src='';
-    try{ src=fs.readFileSync(path.join(root,f),'utf8'); }catch(e){ continue; }
-    for(const m of src.matchAll(/^\s*window\.([A-Za-z_$][\w$]*)\s*=/gm)){
-      if(!pub.has(m[1])) pub.set(m[1], new Set());
-      pub.get(m[1]).add(f);
-    }
-  }
-  const shared=[...pub.entries()].filter(([,fl])=>fl.size>1)
-    .map(([n,fl])=>n+' ('+[...fl].join(' and ')+')');
-  /* G is the one by design: ui.js publishes a menu placeholder ONLY when
-     game.js has not landed, so a page with a stubbed engine still boots to a
-     menu. Any OTHER shared export is two modules fighting over one name. */
-  const unexpected=shared.filter(r=>!r.startsWith('G ('));
-  check('no unexpected window.* export is published by two modules',
-    unexpected.length===0, unexpected.join('; ')+'  [all shared: '+(shared.join('; ')||'none')+']');
-  check('the window scan found the publishes it should have',
-    pub.size>=20 && pub.has('WoolDbg') && pub.has('View'), pub.size+' publishes');
-})();
-
 let app=null, err=null;
 try{ app=load(); }catch(e){ err=e; }
 if(!check('the page loads headlessly', !err, err && err.stack)) finish();
@@ -84,11 +39,18 @@ const U=D.ui;
 if(!check('ui.js augments WoolDbg with a ui namespace', !!U)) finish();
 
 /* The guard behind the one shared window.* export, tested rather than trusted.
-   ui.js publishes a placeholder G only when game.js has not landed; if that
+   test/boot.js owns all three STATIC page-integrity scans (declaration
+   collisions, window-publish sets, and a window publish overwriting another
+   module's declaration) and pins `G` to the js/game.js + js/ui.js publisher
+   pair. What a static scan cannot check is whether the guard that makes that
+   pair safe still WORKS, and that is this line's job — boot's comment points
+   here for it.
+   ui.js publishes a placeholder G only when game.js has not landed. If that
    condition ever inverts, the menu's stub silently replaces the engine's state
-   object and the game plays against a shell. The placeholder has no autoAI /
-   replaying / step, so their presence proves the engine's G is the one that
-   survived — this is the assertion an allow-list of the NAME would not make. */
+   object and the game plays against a shell. The placeholder carries no
+   autoAI / replaying / step, so their presence proves the engine's G survived.
+   Verified by breaking the guard to `if(true)`: this fires, and eight checks
+   go red behind it. */
 check('the engine owns window.G — ui.js\'s placeholder did not win',
   !!G && G.autoAI!==undefined && G.replaying!==undefined && G.step!==undefined,
   'G keys: '+Object.keys(G||{}).join(','));
